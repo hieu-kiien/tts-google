@@ -1,0 +1,12 @@
+{
+  "id": "interaction-12345",
+  "model": "gemini-3.1-flash-tts-preview",
+  "status": "completed",
+  "outputs": [
+    {
+      "type": "audio",
+      "mime_type": "audio/pcm",
+      "data": "AAAA//8BAAEAAAABAAIA"
+    }
+  ]
+}
