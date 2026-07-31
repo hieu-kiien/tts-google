@@ -5,6 +5,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use crate::state::app_state::AppState;
 use crate::audio::pcm_wav::pcm_to_wav_bytes;
 use crate::api::interactions_client::DEFAULT_MODEL;
+use crate::security::input_validation::validate_api_key;
+use crate::models::registry::validate_tts_model;
 
 #[derive(Serialize, Deserialize)]
 pub struct KeyStatus {
@@ -25,6 +27,7 @@ pub fn save_api_key(
     remember: bool,
     state: State<'_, AppState>,
 ) -> Result<KeyStatus, String> {
+    validate_api_key(&key)?;
     state.credentials.set_key(&key, remember)?;
     Ok(KeyStatus {
         configured: state.credentials.is_configured(),
@@ -59,6 +62,9 @@ pub fn save_api_keys(
     remember: bool,
     state: State<'_, AppState>,
 ) -> Result<MultiKeyStatus, String> {
+    for key in &keys {
+        validate_api_key(key)?;
+    }
     let count = state.credentials.set_keys(keys, remember)?;
     Ok(MultiKeyStatus {
         count,
@@ -95,7 +101,10 @@ pub async fn test_api_connection(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let key = match test_key {
-        Some(k) if !k.trim().is_empty() => k,
+        Some(k) if !k.trim().is_empty() => {
+            validate_api_key(&k)?;
+            k
+        }
         _ => state
             .credentials
             .get_key()
@@ -144,7 +153,13 @@ pub async fn synthesize_preview_audio(
         .get_key()
         .ok_or_else(|| "Chưa cấu hình Gemini API Key. Vui lòng bấm 'Cấu Hình API Key' để dán key.".to_string())?;
 
-    let selected_model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let selected_model = match model {
+        Some(m) if !m.trim().is_empty() => {
+            validate_tts_model(&m)?;
+            m
+        }
+        _ => DEFAULT_MODEL.to_string(),
+    };
 
     let formatted_text = match (speed, pitch) {
         (Some(s), Some(p)) if (s - 1.0).abs() > 0.05 || (p - 1.0).abs() > 0.05 => {
@@ -163,7 +178,6 @@ pub async fn synthesize_preview_audio(
     {
         Ok(bytes) => bytes,
         Err(_e) => {
-            // Fallback to DEFAULT_MODEL if specific preview model fails
             state
                 .gemini_client
                 .synthesize_speech(&key, DEFAULT_MODEL, &formatted_text, &voice)

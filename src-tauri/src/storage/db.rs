@@ -1,7 +1,18 @@
 use rusqlite::{Connection, Result as SqlResult};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
 use tracing::info;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct QuotaMetrics {
+    pub today_requests: u64,
+    pub today_chars: u64,
+    pub today_rate_limits: u64,
+    pub avg_latency_ms: u64,
+    pub total_requests: u64,
+    pub total_chars: u64,
+}
 
 pub struct DatabaseManager {
     conn: Mutex<Connection>,
@@ -109,6 +120,14 @@ impl DatabaseManager {
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS quota_logs (
+                date TEXT PRIMARY KEY,
+                requests_count INTEGER NOT NULL DEFAULT 0,
+                chars_count INTEGER NOT NULL DEFAULT 0,
+                rate_limits_count INTEGER NOT NULL DEFAULT 0,
+                total_latency_ms INTEGER NOT NULL DEFAULT 0
+            );
+
             CREATE TABLE IF NOT EXISTS audio_cache (
                 cache_key TEXT PRIMARY KEY,
                 model TEXT NOT NULL,
@@ -153,6 +172,86 @@ impl DatabaseManager {
 
         info!("SQLite database migrations (schema v1) and WAL pragmas executed successfully.");
         Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1").map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([key]).map_err(|e| e.to_string())?;
+        if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let val: String = row.get(0).map_err(|e| e.to_string())?;
+            Ok(Some(val))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [key, value],
+        )
+        .map_err(|e| format!("Failed to save setting {}: {}", key, e))?;
+        Ok(())
+    }
+
+    pub fn record_quota_metric(&self, chars: usize, is_rate_limit: bool, latency_ms: u64) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let rate_inc = if is_rate_limit { 1 } else { 0 };
+        let req_inc = if is_rate_limit { 0 } else { 1 };
+
+        conn.execute(
+            "INSERT INTO quota_logs (date, requests_count, chars_count, rate_limits_count, total_latency_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(date) DO UPDATE SET
+                requests_count = requests_count + excluded.requests_count,
+                chars_count = chars_count + excluded.chars_count,
+                rate_limits_count = rate_limits_count + excluded.rate_limits_count,
+                total_latency_ms = total_latency_ms + excluded.total_latency_ms",
+            rusqlite::params![today, req_inc, chars as i64, rate_inc, latency_ms as i64],
+        )
+        .map_err(|e| format!("Failed to log quota metric: {}", e))?;
+        Ok(())
+    }
+
+    pub fn get_quota_metrics(&self) -> Result<QuotaMetrics, String> {
+        let conn = self.conn.lock().unwrap();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        let (today_requests, today_chars, today_rate_limits, today_total_latency): (u64, u64, u64, u64) = conn
+            .query_row(
+                "SELECT requests_count, chars_count, rate_limits_count, total_latency_ms
+                 FROM quota_logs WHERE date = ?1",
+                [&today],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap_or((0, 0, 0, 0));
+
+        let (total_requests, total_chars): (u64, u64) = conn
+            .query_row(
+                "SELECT COALESCE(SUM(requests_count), 0), COALESCE(SUM(chars_count), 0) FROM quota_logs",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or((0, 0));
+
+        let avg_latency_ms = if today_requests > 0 {
+            today_total_latency / today_requests
+        } else {
+            0
+        };
+
+        Ok(QuotaMetrics {
+            today_requests,
+            today_chars,
+            today_rate_limits,
+            avg_latency_ms,
+            total_requests,
+            total_chars,
+        })
     }
 
     pub fn get_schema_version(&self) -> Result<i32, String> {

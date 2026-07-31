@@ -7,6 +7,7 @@ export async function createProject(params: {
   voice: string;
   preset: string;
   chunkMode?: string;
+  model?: string;
 }): Promise<ProjectRecord> {
   return await invoke<ProjectRecord>("create_project", params);
 }

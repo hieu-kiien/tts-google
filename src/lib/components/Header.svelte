@@ -8,12 +8,16 @@
     onOpenDictionary,
     onStartQueue,
     onPauseQueue,
+    onOpenQuotaDashboard,
+    onOpenSettings,
   }: {
     keyConfigured?: boolean;
     onOpenApiKeyModal?: () => void;
     onOpenDictionary?: () => void;
     onStartQueue?: () => void;
     onPauseQueue?: () => void;
+    onOpenQuotaDashboard?: () => void;
+    onOpenSettings?: () => void;
   } = $props();
 
   let completedCount = $derived(
@@ -90,6 +94,14 @@
 
   <!-- Zone A3: Utilities, Key, Dictionary, Theme -->
   <div class="header-right">
+    <button class="btn-icon" onclick={onOpenQuotaDashboard} title="Bảng thống kê Gemini Quota" aria-label="Thống kê Quota API">
+      📊
+    </button>
+
+    <button class="btn-icon" onclick={onOpenSettings} title="Cấu hình số luồng Concurrency" aria-label="Cài đặt hệ thống">
+      ⚙️
+    </button>
+
     <button class="btn-icon" onclick={() => uiState.showShortcutGuide = true} title="Phím tắt bàn phím" aria-label="Phím tắt bàn phím">
       ⌨️
     </button>

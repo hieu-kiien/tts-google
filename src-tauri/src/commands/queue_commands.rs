@@ -133,7 +133,7 @@ pub async fn check_export_readiness(
             successful_segments: 0,
             failed_segments: 0,
             total_segments: 0,
-            output_directory: state.output_dir.clone(),
+            output_directory: state.output_dir.to_string_lossy().to_string(),
         });
     }
 
@@ -156,6 +156,6 @@ pub async fn check_export_readiness(
         successful_segments: successful,
         failed_segments: failed,
         total_segments: total,
-        output_directory: state.output_dir.clone(),
+        output_directory: state.output_dir.to_string_lossy().to_string(),
     })
 }

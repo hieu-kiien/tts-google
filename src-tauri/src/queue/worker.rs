@@ -9,7 +9,6 @@ use chrono::Utc;
 
 use crate::state::app_state::AppState;
 use crate::storage::project_repo::ProjectRepository;
-use crate::storage::audio_cache::AudioCache;
 use crate::api::interactions_client::ApiError;
 use crate::audio::pcm_wav::{write_pcm_to_wav_file, get_wav_duration_ms};
 
@@ -18,7 +17,16 @@ pub enum QueueState {
     Idle,
     Running,
     Paused,
+    Completed,
     Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorkerOutcome {
+    Completed,
+    Cancelled,
+    Failed(String),
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -52,6 +60,7 @@ pub enum QueueCommand {
     ResumeProject { project_id: String, reply: oneshot::Sender<Result<(), String>> },
     CancelProject { project_id: String, reply: oneshot::Sender<Result<(), String>> },
     GetSnapshot { project_id: String, reply: oneshot::Sender<Result<QueueSnapshot, String>> },
+    WorkerFinished { project_id: String, outcome: WorkerOutcome },
 }
 
 pub struct QueueService {
@@ -67,16 +76,15 @@ impl QueueService {
 
         let stream_id_clone = stream_id.clone();
         let handle_clone = handle.clone();
+        let tx_for_worker = tx.clone();
 
         tauri::async_runtime::spawn(async move {
-
             let mut current_project_id: Option<String> = None;
             let mut cancel_token: Option<CancellationToken> = None;
             let mut is_paused = false;
 
             info!("QueueService actor loop started with stream_id: {}", stream_id_clone);
 
-            // Recover expired/orphaned jobs on startup
             if let Some(db) = &app_state.db {
                 let _ = db.recover_expired_jobs();
             }
@@ -86,12 +94,11 @@ impl QueueService {
                     QueueCommand::EnqueueProject { project_id, reply } => {
                         // Idempotent check
                         if current_project_id.as_deref() == Some(&project_id) && !is_paused {
-                            let snapshot = Self::build_snapshot(&app_state, &project_id);
+                            let snapshot = Self::build_snapshot(&app_state, &project_id, Some(QueueState::Running));
                             let _ = reply.send(Ok(snapshot));
                             continue;
                         }
 
-                        // Mark segments as queued in DB
                         if let Some(db) = &app_state.db {
                             let _ = ProjectRepository::mark_project_segments_queued(db, &project_id);
                         }
@@ -99,29 +106,30 @@ impl QueueService {
                         current_project_id = Some(project_id.clone());
                         is_paused = false;
 
-                        // Cancel previous token if any
                         if let Some(token) = cancel_token.take() {
                             token.cancel();
                         }
                         let token = CancellationToken::new();
                         cancel_token = Some(token.clone());
 
-                        let snapshot = Self::build_snapshot(&app_state, &project_id);
-                        let _ = reply.send(Ok(snapshot));
+                        let snapshot = Self::build_snapshot(&app_state, &project_id, Some(QueueState::Running));
+                        let _ = reply.send(Ok(snapshot.clone()));
+                        let _ = handle_clone.emit("queue-snapshot", &snapshot);
 
                         let app_state_runner = Arc::clone(&app_state);
                         let handle_runner = handle_clone.clone();
                         let stream_id_runner = stream_id_clone.clone();
                         let project_id_runner = project_id.clone();
+                        let tx_runner = tx_for_worker.clone();
 
                         tauri::async_runtime::spawn(async move {
-
                             Self::run_worker_loop(
                                 project_id_runner,
                                 app_state_runner,
                                 handle_runner,
                                 stream_id_runner,
                                 token,
+                                tx_runner,
                             ).await;
                         });
                     }
@@ -131,6 +139,8 @@ impl QueueService {
                             if let Some(token) = cancel_token.take() {
                                 token.cancel();
                             }
+                            let snapshot = Self::build_snapshot(&app_state, &project_id, Some(QueueState::Paused));
+                            let _ = handle_clone.emit("queue-snapshot", &snapshot);
                         }
                         let _ = reply.send(Ok(()));
                     }
@@ -140,19 +150,23 @@ impl QueueService {
                             let token = CancellationToken::new();
                             cancel_token = Some(token.clone());
 
+                            let snapshot = Self::build_snapshot(&app_state, &project_id, Some(QueueState::Running));
+                            let _ = handle_clone.emit("queue-snapshot", &snapshot);
+
                             let app_state_runner = Arc::clone(&app_state);
                             let handle_runner = handle_clone.clone();
                             let stream_id_runner = stream_id_clone.clone();
                             let project_id_runner = project_id.clone();
+                            let tx_runner = tx_for_worker.clone();
 
                             tauri::async_runtime::spawn(async move {
-
                                 Self::run_worker_loop(
                                     project_id_runner,
                                     app_state_runner,
                                     handle_runner,
                                     stream_id_runner,
                                     token,
+                                    tx_runner,
                                 ).await;
                             });
                         }
@@ -165,12 +179,38 @@ impl QueueService {
                             }
                             current_project_id = None;
                             is_paused = false;
+
+                            let snapshot = Self::build_snapshot(&app_state, &project_id, Some(QueueState::Cancelled));
+                            let _ = handle_clone.emit("queue-snapshot", &snapshot);
                         }
                         let _ = reply.send(Ok(()));
                     }
                     QueueCommand::GetSnapshot { project_id, reply } => {
-                        let snapshot = Self::build_snapshot(&app_state, &project_id);
+                        let override_st = if current_project_id.as_deref() == Some(&project_id) {
+                            if is_paused {
+                                Some(QueueState::Paused)
+                            } else {
+                                Some(QueueState::Running)
+                            }
+                        } else {
+                            None
+                        };
+                        let snapshot = Self::build_snapshot(&app_state, &project_id, override_st);
                         let _ = reply.send(Ok(snapshot));
+                    }
+                    QueueCommand::WorkerFinished { project_id, outcome } => {
+                        if current_project_id.as_deref() == Some(&project_id) && !is_paused {
+                            current_project_id = None;
+                            cancel_token = None;
+                            let final_state = match outcome {
+                                WorkerOutcome::Completed => QueueState::Completed,
+                                WorkerOutcome::Cancelled => QueueState::Cancelled,
+                                WorkerOutcome::Failed(_) => QueueState::Failed,
+                            };
+
+                            let snapshot = Self::build_snapshot(&app_state, &project_id, Some(final_state));
+                            let _ = handle_clone.emit("queue-snapshot", &snapshot);
+                        }
                     }
                 }
             }
@@ -219,12 +259,12 @@ impl QueueService {
         reply_rx.await.map_err(|_| "Actor dropped reply".to_string())?
     }
 
-    fn build_snapshot(app_state: &AppState, project_id: &str) -> QueueSnapshot {
+    fn build_snapshot(app_state: &AppState, project_id: &str, override_state: Option<QueueState>) -> QueueSnapshot {
         let db = match &app_state.db {
             Some(d) => d,
             None => return QueueSnapshot {
                 project_id: project_id.to_string(),
-                queue_state: QueueState::Idle,
+                queue_state: override_state.unwrap_or(QueueState::Idle),
                 total_segments: 0,
                 completed_segments: 0,
                 failed_segments: 0,
@@ -240,9 +280,19 @@ impl QueueService {
         let pending = total.saturating_sub(completed + failed);
         let max_rev = segs.iter().map(|s| s.state_revision).max().unwrap_or(0);
 
+        let queue_state = if let Some(st) = override_state {
+            st
+        } else if pending == 0 && total > 0 && failed == 0 {
+            QueueState::Completed
+        } else if failed > 0 && pending == 0 {
+            QueueState::Failed
+        } else {
+            QueueState::Idle
+        };
+
         QueueSnapshot {
             project_id: project_id.to_string(),
-            queue_state: if pending > 0 { QueueState::Running } else { QueueState::Idle },
+            queue_state,
             total_segments: total,
             completed_segments: completed,
             failed_segments: failed,
@@ -251,7 +301,6 @@ impl QueueService {
         }
     }
 
-    /// Computes current segment counts from DB for accurate progress events.
     fn get_segment_counts(app_state: &AppState, project_id: &str) -> (usize, usize, usize) {
         let db = match &app_state.db {
             Some(d) => d,
@@ -270,33 +319,44 @@ impl QueueService {
         handle: tauri::AppHandle,
         stream_id: String,
         cancel_token: CancellationToken,
+        tx: mpsc::Sender<QueueCommand>,
     ) {
         let worker_id = format!("worker_{}", Uuid::new_v4().simple());
         let lease_duration_secs = 45u64;
         let mut sequence: u64 = 0;
+        let final_outcome;
 
         loop {
             if cancel_token.is_cancelled() {
                 info!("Worker loop cancelled for project {}", project_id);
+                final_outcome = WorkerOutcome::Cancelled;
                 break;
             }
 
             let db = match &app_state.db {
                 Some(d) => d,
-                None => break,
+                None => {
+                    final_outcome = WorkerOutcome::Failed("Database offline".to_string());
+                    break;
+                }
             };
 
-            // 1. Claim next task from DB
             let task = match ProjectRepository::claim_next_task(db, &project_id, &worker_id, lease_duration_secs) {
                 Ok(Some(t)) => t,
                 Ok(None) => {
                     if let Ok(Some(delay_ms)) = ProjectRepository::get_next_retry_delay_ms(db, &project_id) {
                         let wait_time = delay_ms.clamp(100, 2000);
-                        info!("No immediate task ready for project {}, but retry_wait tasks exist. Sleeping {}ms...", project_id, wait_time);
+                        info!("No immediate task ready for project {}, sleeping {}ms...", project_id, wait_time);
                         sleep(Duration::from_millis(wait_time)).await;
                         continue;
                     }
-                    info!("No more queued or retrying tasks for project {}. Worker exiting loop.", project_id);
+                    info!("No more queued tasks for project {}. Worker exiting loop.", project_id);
+                    let (total, comp, fail) = Self::get_segment_counts(&app_state, &project_id);
+                    if fail > 0 && comp + fail >= total {
+                        final_outcome = WorkerOutcome::Failed(format!("Queue finished with {} failed segments", fail));
+                    } else {
+                        final_outcome = WorkerOutcome::Completed;
+                    }
                     break;
                 }
                 Err(e) => {
@@ -321,7 +381,6 @@ impl QueueService {
                 error_message: None,
             });
 
-            // 2. LOCK RELEASE PATTERN: Perform TTS Network Request outside database locks
             let api_key = match app_state.credentials.get_key() {
                 Some(k) => k,
                 None => {
@@ -338,6 +397,7 @@ impl QueueService {
                         Some("401"),
                         Some("Missing Gemini API Key"),
                     );
+                    final_outcome = WorkerOutcome::Failed("Missing Gemini API Key".to_string());
                     break;
                 }
             };
@@ -356,127 +416,57 @@ impl QueueService {
                     None,
                     None,
                 );
+                final_outcome = WorkerOutcome::Cancelled;
                 break;
             }
 
-            let (target_voice, target_model) = if let Some(db) = &app_state.db {
-                if let Ok(Some(p)) = ProjectRepository::get_project_by_id(db, &project_id) {
-                    (p.voice, p.model)
-                } else {
-                    ("Kore".to_string(), "gemini-3.1-flash-tts-preview".to_string())
-                }
-            } else {
-                ("Kore".to_string(), "gemini-3.1-flash-tts-preview".to_string())
-            };
+            let proj_record = ProjectRepository::get_project_by_id(db, &project_id).ok().flatten();
+            let model_name = proj_record.map(|p| p.model).unwrap_or_else(|| "gemini-3.1-flash-tts-preview".to_string());
 
-            // --- CACHE CHECK: skip API if identical audio exists ---
-            let cache_key = AudioCache::compute_cache_key(&target_model, &target_voice, &task.text);
-            if let Some(db) = &app_state.db {
-                if let Some(cached_path) = AudioCache::lookup(db, &cache_key) {
-                    let target_path = format!("{}/seg_{}_{}.wav", app_state.output_dir, project_id, task.position);
-                    if cached_path != target_path {
-                        let _ = std::fs::copy(&cached_path, &target_path);
-                    }
-                    let duration_ms = get_wav_duration_ms(&target_path).unwrap_or(0);
-                    let byte_size = std::fs::metadata(&target_path).map(|m| m.len()).unwrap_or(0);
+            let start_inst = std::time::Instant::now();
+            let pcm_result = app_state
+                .gemini_client
+                .synthesize_speech(&api_key, &model_name, &task.prompt, &task.voice.clone().unwrap_or_else(|| "Kore".to_string()))
+                .await;
+            let latency_ms = start_inst.elapsed().as_millis() as u64;
+            let char_count = task.text.chars().count();
 
-                    let committed = ProjectRepository::commit_task_result(
-                        db, &task.id, &worker_id, task.fingerprint.as_deref(),
-                        "success", Some(&target_path), byte_size, duration_ms,
-                        None, None, None,
-                    ).unwrap_or(false);
-
-                    if committed {
-                        sequence += 1;
-                        let (t_segs, c_segs, _) = Self::get_segment_counts(&app_state, &project_id);
-                        let _ = handle.emit("queue-progress", QueueProgressEvent {
-                            stream_id: stream_id.clone(),
-                            sequence,
-                            project_id: project_id.clone(),
-                            segment_id: Some(task.id.clone()),
-                            position: task.position,
-                            total_segments: t_segs,
-                            completed_segments: c_segs,
-                            status: "success".to_string(),
-                            revision: task.state_revision + 1,
-                            error_message: None,
-                        });
-                    }
-                    // Skip API call and rate-limit sleep
-                    continue;
-                }
-            }
-
-            let tts_res = tokio::select! {
-                result = app_state.gemini_client.synthesize_speech(
-                    &api_key,
-                    &target_model,
-                    &task.prompt,
-                    &target_voice,
-                ) => result,
-                _ = cancel_token.cancelled() => {
-                    info!("API request cancelled for task {} during synthesis.", task.id);
-                    let _ = ProjectRepository::commit_task_result(
-                        db,
-                        &task.id,
-                        &worker_id,
-                        None,
-                        "queued",
-                        None,
-                        0,
-                        0,
-                        None,
-                        None,
-                        None,
-                    );
-                    break;
-                }
-            };
-
-            // 3. Process API result and commit conditionally to DB
-            match tts_res {
+            match pcm_result {
                 Ok(pcm_bytes) => {
-                    let target_path = format!("{}/seg_{}_{}.wav", app_state.output_dir, project_id, task.position);
-                    let target_path_tmp = format!("{}.tmp", target_path);
+                    app_state.total_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    app_state.total_chars.fetch_add(char_count as u64, std::sync::atomic::Ordering::Relaxed);
+                    app_state.total_latency_ms.fetch_add(latency_ms, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(ref db_instance) = app_state.db {
+                        let _ = db_instance.record_quota_metric(char_count, false, latency_ms);
+                    }
 
-                    if write_pcm_to_wav_file(&pcm_bytes, &target_path_tmp).is_ok() {
-                        // Atomic rename in same directory
-                        if let Err(rename_err) = std::fs::rename(&target_path_tmp, &target_path) {
-                            tracing::info!("Worker rename failed ({}), falling back to copy+remove.", rename_err);
-                            if let Err(copy_err) = std::fs::copy(&target_path_tmp, &target_path) {
-                                tracing::warn!("Worker copy also failed: {}", copy_err);
-                            }
-                            let _ = std::fs::remove_file(&target_path_tmp);
-                        }
-                        let duration_ms = get_wav_duration_ms(&target_path).unwrap_or(0);
-                        let bytes_len = pcm_bytes.len() as u64;
+                    let fp = task.fingerprint.as_deref().unwrap_or("legacy_fp");
+                    let cached_wav_path = app_state.output_dir.join(format!("{}.wav", fp));
+                    let wav_path_str = cached_wav_path.to_string_lossy().to_string();
 
-                        // Store in audio cache for future reuse
-                        if let Some(db) = &app_state.db {
-                            let _ = AudioCache::store(
-                                db, &cache_key, &target_model, &target_voice,
-                                &target_path, duration_ms, bytes_len,
-                            );
-                        }
+                    if let Err(e) = write_pcm_to_wav_file(&pcm_bytes, &wav_path_str) {
+                        error!("Failed to write WAV file: {}", e);
+                    }
 
-                        let committed = ProjectRepository::commit_task_result(
+                    if cached_wav_path.exists() {
+                        let dur_ms = get_wav_duration_ms(&wav_path_str).unwrap_or(task.duration_ms);
+                        let file_size = std::fs::metadata(&cached_wav_path).map(|m| m.len()).unwrap_or(0);
+
+                        let commit_res = ProjectRepository::commit_task_result(
                             db,
                             &task.id,
                             &worker_id,
-                            task.fingerprint.as_deref(),
+                            Some(&wav_path_str),
                             "success",
-                            Some(&target_path),
-                            bytes_len,
-                            duration_ms,
+                            Some(fp),
+                            dur_ms,
+                            file_size,
                             None,
                             None,
                             None,
-                        ).unwrap_or(false);
+                        );
 
-                        if !committed {
-                            warn!("Commit result returned false for task {}. Output discarded (stale/reclaimed).", task.id);
-                            let _ = std::fs::remove_file(&target_path);
-                        } else {
+                        if commit_res.is_ok() {
                             sequence += 1;
                             let (t_segs, c_segs, _) = Self::get_segment_counts(&app_state, &project_id);
                             let _ = handle.emit("queue-progress", QueueProgressEvent {
@@ -512,9 +502,16 @@ impl QueueService {
                     let err_str = err.to_string();
                     warn!("Task {} attempt {} failed: {}", task.id, task.attempt_count + 1, err_str);
 
+                    let is_rate_limit = matches!(err, ApiError::RateLimited(_) | ApiError::RateLimitedDaily);
+                    if is_rate_limit {
+                        app_state.rate_limit_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if let Some(ref db_instance) = app_state.db {
+                            let _ = db_instance.record_quota_metric(0, true, latency_ms);
+                        }
+                    }
+
                     let is_retryable = match &err {
                         ApiError::RateLimited(retry_after) => {
-                            // Mark this key on cooldown so next request uses a different key
                             let cooldown = retry_after.unwrap_or(30);
                             app_state.credentials.mark_key_cooldown(&api_key, cooldown);
                             true
@@ -525,14 +522,13 @@ impl QueueService {
                         ApiError::CorruptAudio(_) => true,
                         ApiError::TruncatedAudio { .. } => true,
                         ApiError::RateLimitedDaily => {
-                            // Mark this key exhausted for 24h, try next key
                             app_state.credentials.mark_key_daily_exhausted(&api_key);
                             if app_state.credentials.key_count() > 1 {
-                                warn!("Key daily limit hit — rotating to next key for project {}.", project_id);
-                                true // retry with next key
+                                warn!("Key daily limit hit — rotating key for project {}.", project_id);
+                                true
                             } else {
-                                warn!("Daily quota exhausted (single key) — pausing queue for project {}.", project_id);
-                                false // no other key available
+                                warn!("Daily quota exhausted — pausing queue for project {}.", project_id);
+                                false
                             }
                         },
                         _ => false,
@@ -583,17 +579,20 @@ impl QueueService {
                 }
             }
 
-            // Dynamic rate limit delay: reduce per-request pause when multiple API keys are available
             let key_count = app_state.credentials.key_count().max(1) as u64;
-            let rate_delay_ms = (4100u64 / key_count).max(500); // minimum 500ms between requests
+            let rate_delay_ms = (4100u64 / key_count).max(500);
             tokio::select! {
                 _ = sleep(Duration::from_millis(rate_delay_ms)) => {},
                 _ = cancel_token.cancelled() => {
                     info!("Rate-limit sleep interrupted by cancellation.");
+                    final_outcome = WorkerOutcome::Cancelled;
                     break;
                 }
             }
         }
+
+        // Send WorkerFinished to actor before exiting
+        let _ = tx.send(QueueCommand::WorkerFinished { project_id, outcome: final_outcome }).await;
     }
 }
 
@@ -640,9 +639,8 @@ mod tests {
         assert_eq!(calculate_backoff_delay(&rate_limit_no_header, 0), 10);
 
         let net_err = ApiError::NetworkError("Connect failed".to_string());
-        assert_eq!(calculate_backoff_delay(&net_err, 0), 2); // 2^1 = 2
-        assert_eq!(calculate_backoff_delay(&net_err, 1), 4); // 2^2 = 4
-        assert_eq!(calculate_backoff_delay(&net_err, 2), 8); // 2^3 = 8
+        assert_eq!(calculate_backoff_delay(&net_err, 0), 2);
+        assert_eq!(calculate_backoff_delay(&net_err, 1), 4);
+        assert_eq!(calculate_backoff_delay(&net_err, 2), 8);
     }
 }
-

@@ -2,6 +2,7 @@ pub mod api;
 pub mod audio;
 pub mod error;
 pub mod commands;
+pub mod models;
 pub mod queue;
 pub mod security;
 pub mod state;
@@ -35,8 +36,15 @@ pub fn run() {
                 credentials: Arc::clone(&app_state_base.credentials),
                 gemini_client: Arc::clone(&app_state_base.gemini_client),
                 db: app_state_base.db.clone(),
+                app_data_dir: app_state_base.app_data_dir.clone(),
                 output_dir: app_state_base.output_dir.clone(),
+                temp_dir: app_state_base.temp_dir.clone(),
                 queue_service: Some(queue_service),
+                concurrency: std::sync::atomic::AtomicU32::new(app_state_base.concurrency.load(std::sync::atomic::Ordering::Relaxed)),
+                total_requests: std::sync::atomic::AtomicU64::new(0),
+                total_chars: std::sync::atomic::AtomicU64::new(0),
+                rate_limit_hits: std::sync::atomic::AtomicU64::new(0),
+                total_latency_ms: std::sync::atomic::AtomicU64::new(0),
             };
 
             app.manage(final_state);
@@ -89,7 +97,10 @@ pub fn run() {
             commands::queue_commands::resume_project,
             commands::queue_commands::cancel_project,
             commands::queue_commands::get_queue_snapshot,
-            commands::queue_commands::check_export_readiness
+            commands::queue_commands::check_export_readiness,
+            commands::settings_commands::get_app_settings,
+            commands::settings_commands::update_app_settings,
+            commands::settings_commands::get_quota_metrics
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

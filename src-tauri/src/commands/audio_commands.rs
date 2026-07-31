@@ -7,6 +7,7 @@ use crate::storage::project_repo::ProjectRepository;
 use crate::audio::wav_merger::merge_wav_files;
 use crate::text::srt_exporter::generate_srt_subtitles;
 use crate::text::vtt_exporter::generate_vtt_subtitles;
+use crate::security::path_policy::{resolve_write_target, resolve_existing_read_target, validate_base64_payload_size};
 
 #[derive(serde::Serialize)]
 pub struct MergeResult {
@@ -51,15 +52,18 @@ pub fn merge_project_audio(
         None
     };
 
-    let master_path = match custom_output_path {
+    let raw_master_path = match custom_output_path {
         Some(p) if !p.trim().is_empty() => p,
-        _ => format!("{}/master_{}.wav", state.output_dir, project_id),
+        _ => state.output_dir.join(format!("master_{}.wav", project_id)).to_string_lossy().to_string(),
     };
 
-    let total_duration_ms = merge_wav_files(&valid_audio_paths, &master_path, silence_gap_ms)?;
+    let master_path = resolve_write_target(&state.get_allowed_roots(), &raw_master_path, &["wav"])?;
+    let master_path_str = master_path.to_string_lossy().to_string();
+
+    let total_duration_ms = merge_wav_files(&valid_audio_paths, &master_path_str, silence_gap_ms)?;
 
     Ok(MergeResult {
-        output_path: master_path,
+        output_path: master_path_str,
         total_duration_ms,
         warning,
     })
@@ -81,16 +85,19 @@ pub fn export_project_srt(
 
     let srt_content = generate_srt_subtitles(&segments, silence_gap_ms);
 
-    let output_path = match custom_output_path {
+    let raw_output_path = match custom_output_path {
         Some(p) if !p.trim().is_empty() => p,
-        _ => format!("{}/subtitle_{}.srt", state.output_dir, project_id),
+        _ => state.output_dir.join(format!("subtitle_{}.srt", project_id)).to_string_lossy().to_string(),
     };
 
+    let output_path = resolve_write_target(&state.get_allowed_roots(), &raw_output_path, &["srt"])?;
+    let output_path_str = output_path.to_string_lossy().to_string();
+
     fs::write(&output_path, &srt_content)
-        .map_err(|e| format!("Không thể ghi file phụ đề SRT tại {}: {}", output_path, e))?;
+        .map_err(|e| format!("Không thể ghi file phụ đề SRT tại {}: {}", output_path_str, e))?;
 
     Ok(SubtitleExportResult {
-        output_path,
+        output_path: output_path_str,
         content: srt_content,
     })
 }
@@ -111,16 +118,19 @@ pub fn export_project_vtt(
 
     let vtt_content = generate_vtt_subtitles(&segments, silence_gap_ms);
 
-    let output_path = match custom_output_path {
+    let raw_output_path = match custom_output_path {
         Some(p) if !p.trim().is_empty() => p,
-        _ => format!("{}/subtitle_{}.vtt", state.output_dir, project_id),
+        _ => state.output_dir.join(format!("subtitle_{}.vtt", project_id)).to_string_lossy().to_string(),
     };
 
+    let output_path = resolve_write_target(&state.get_allowed_roots(), &raw_output_path, &["vtt"])?;
+    let output_path_str = output_path.to_string_lossy().to_string();
+
     fs::write(&output_path, &vtt_content)
-        .map_err(|e| format!("Không thể ghi file phụ đề VTT tại {}: {}", output_path, e))?;
+        .map_err(|e| format!("Không thể ghi file phụ đề VTT tại {}: {}", output_path_str, e))?;
 
     Ok(SubtitleExportResult {
-        output_path,
+        output_path: output_path_str,
         content: vtt_content,
     })
 }
@@ -152,16 +162,19 @@ pub fn export_project_lrc(
         })
         .collect();
 
-    let output_path = match custom_output_path {
+    let raw_output_path = match custom_output_path {
         Some(p) if !p.trim().is_empty() => p,
-        _ => format!("{}/subtitle_{}.lrc", state.output_dir, project_id),
+        _ => state.output_dir.join(format!("subtitle_{}.lrc", project_id)).to_string_lossy().to_string(),
     };
+
+    let output_path = resolve_write_target(&state.get_allowed_roots(), &raw_output_path, &["lrc"])?;
+    let output_path_str = output_path.to_string_lossy().to_string();
 
     let exported_path = crate::text::lrc_exporter::LrcExporter::export_lrc(
         &lrc_segs,
         "Auto TTS Project",
         "Gemini TTS Reader",
-        &output_path,
+        &output_path_str,
     )?;
 
     let content = fs::read_to_string(&exported_path).unwrap_or_default();
@@ -211,14 +224,17 @@ pub fn export_project_m4b_manifest(
         chapters,
     };
 
-    let output_path = match custom_output_path {
+    let raw_output_path = match custom_output_path {
         Some(p) if !p.trim().is_empty() => p,
-        _ => format!("{}/audiobook_{}.m4b.json", state.output_dir, project_id),
+        _ => state.output_dir.join(format!("audiobook_{}.m4b.json", project_id)).to_string_lossy().to_string(),
     };
+
+    let output_path = resolve_write_target(&state.get_allowed_roots(), &raw_output_path, &["json"])?;
+    let output_path_str = output_path.to_string_lossy().to_string();
 
     let exported_path = crate::audio::m4b_exporter::M4bExporter::export_manifest(
         &manifest,
-        &output_path,
+        &output_path_str,
     )?;
 
     let content = fs::read_to_string(&exported_path).unwrap_or_default();
@@ -233,10 +249,15 @@ pub fn export_project_m4b_manifest(
 pub fn save_single_segment_audio(
     source_audio_path: String,
     target_output_path: String,
+    state: State<'_, AppState>,
 ) -> Result<String, String> {
-    fs::copy(&source_audio_path, &target_output_path)
+    let source_path = resolve_existing_read_target(&state.get_allowed_roots(), &source_audio_path, &["wav"])?;
+    let target_path = resolve_write_target(&state.get_allowed_roots(), &target_output_path, &["wav"])?;
+
+    fs::copy(&source_path, &target_path)
         .map_err(|e| format!("Không thể lưu file audio segment: {}", e))?;
-    Ok(target_output_path)
+
+    Ok(target_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -246,25 +267,15 @@ pub fn read_audio_data_url(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let target = path.or(file_path).ok_or_else(|| "Chưa cung cấp đường dẫn file audio".to_string())?;
-    
+
     if target.starts_with("data:") {
         return Ok(target);
     }
-    
-    // Security: validate path is within allowed output directory
-    let canonical_target = std::path::Path::new(&target)
-        .canonicalize()
-        .map_err(|e| format!("Invalid audio path: {}", e))?;
-    let canonical_output = std::path::Path::new(&state.output_dir)
-        .canonicalize()
-        .map_err(|e| format!("Invalid output dir: {}", e))?;
-    
-    if !canonical_target.starts_with(&canonical_output) {
-        return Err(format!("Access denied: file path is outside allowed directory"));
-    }
-    
-    let bytes = fs::read(&target)
-        .map_err(|e| format!("Failed to read audio file at {}: {}", target, e))?;
+
+    let canonical_target = resolve_existing_read_target(&state.get_allowed_roots(), &target, &["wav", "mp3", "ogg", "flac"])?;
+
+    let bytes = fs::read(&canonical_target)
+        .map_err(|e| format!("Failed to read audio file at {}: {}", canonical_target.display(), e))?;
     let base64_str = BASE64_STANDARD.encode(&bytes);
     Ok(format!("data:audio/wav;base64,{}", base64_str))
 }
@@ -273,10 +284,19 @@ pub fn read_audio_data_url(
 pub fn write_binary_file(
     target_path: String,
     base64_data: String,
+    state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let bytes = BASE64_STANDARD.decode(&base64_data)
-        .map_err(|e| format!("Lỗi giải mã base64: {}", e))?;
-    fs::write(&target_path, &bytes)
-        .map_err(|e| format!("Không thể ghi tệp: {}", e))?;
-    Ok(target_path)
+    let resolved_path = resolve_write_target(
+        &state.get_allowed_roots(),
+        &target_path,
+        &["wav", "mp3", "txt", "json", "srt", "vtt", "lrc"],
+    )?;
+
+    // Max 50MB decoded limit
+    let bytes = validate_base64_payload_size(&base64_data, 50 * 1024 * 1024)?;
+
+    fs::write(&resolved_path, &bytes)
+        .map_err(|e| format!("Không thể ghi tệp tại {}: {}", resolved_path.display(), e))?;
+
+    Ok(resolved_path.to_string_lossy().to_string())
 }

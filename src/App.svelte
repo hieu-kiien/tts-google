@@ -28,6 +28,8 @@
   import ExportModal from "./lib/components/modals/ExportModal.svelte";
   import ShortcutGuideModal from "./lib/components/modals/ShortcutGuideModal.svelte";
   import BatchProcessorModal from "./lib/components/modals/BatchProcessorModal.svelte";
+  import SettingsModal from "./lib/components/SettingsModal.svelte";
+  import QuotaDashboard from "./lib/components/QuotaDashboard.svelte";
   import ToastRegion from "./lib/components/ToastRegion.svelte";
 
   let keyConfigured = $state(false);
@@ -35,6 +37,8 @@
   let rememberKey = $state(true);
   let isTestingKey = $state(false);
   let queueSnapshot = $state<QueueSnapshot | null>(null);
+  let showSettingsModal = $state(false);
+  let showQuotaDashboard = $state(false);
 
   // Global Keyboard Navigation (Section 14 & 13)
   function handleKeyDown(e: KeyboardEvent) {
@@ -192,15 +196,39 @@
   onMount(() => {
     checkKeyStatus();
 
-    let unlisten: UnlistenFn | undefined;
+    let unlistenProgress: UnlistenFn | undefined;
+    let unlistenSnapshot: UnlistenFn | undefined;
 
-    listen<QueueSnapshot>("queue-progress", (event) => {
-      queueSnapshot = event.payload;
-    }).then(fn => {
-      unlisten = fn;
-    }).catch(err => {
-      console.warn("Lỗi đăng ký sự kiện queue-progress:", err);
-    });
+    listen<QueueProgressEvent>("queue-progress", (event) => {
+      if (!projectState.currentProject || event.payload.project_id !== projectState.currentProject.id) {
+        return;
+      }
+      const progress = event.payload;
+      // Update individual segment status if segment_id is present
+      if (progress.segment_id && projectState.segments) {
+        const segIdx = projectState.segments.findIndex(s => s.id === progress.segment_id);
+        if (segIdx !== -1) {
+          projectState.segments[segIdx].status = progress.status as any;
+          if (progress.error_message) {
+            projectState.segments[segIdx].error_message = progress.error_message;
+          }
+        }
+      }
+      // Incrementally update completed count on existing snapshot
+      if (queueSnapshot) {
+        queueSnapshot = {
+          ...queueSnapshot,
+          total_segments: progress.total_segments,
+          completed_segments: progress.completed_segments,
+        };
+      }
+    }).then(fn => { unlistenProgress = fn; });
+
+    listen<QueueSnapshot>("queue-snapshot", (event) => {
+      if (projectState.currentProject && event.payload.project_id === projectState.currentProject.id) {
+        queueSnapshot = event.payload;
+      }
+    }).then(fn => { unlistenSnapshot = fn; });
 
     // Load projects from database on startup
     (async () => {
@@ -228,7 +256,8 @@
 
     window.addEventListener("keydown", handleKeyDown);
     return () => {
-      if (unlisten) unlisten();
+      if (unlistenProgress) unlistenProgress();
+      if (unlistenSnapshot) unlistenSnapshot();
       window.removeEventListener("keydown", handleKeyDown);
     };
   });
@@ -242,6 +271,8 @@
     onOpenDictionary={() => uiState.showDictionaryModal = true}
     onStartQueue={handleStartQueue}
     onPauseQueue={handlePauseQueue}
+    onOpenQuotaDashboard={() => showQuotaDashboard = true}
+    onOpenSettings={() => showSettingsModal = true}
   />
 
   <!-- Main 3-Column Layout (Zones B, C, D) -->
@@ -345,6 +376,10 @@
   {#if uiState.showBatchProcessorModal}
     <BatchProcessorModal />
   {/if}
+
+  <SettingsModal isOpen={showSettingsModal} onClose={() => showSettingsModal = false} />
+  <QuotaDashboard isOpen={showQuotaDashboard} onClose={() => showQuotaDashboard = false} />
+
   <ToastRegion />
 </div>
 

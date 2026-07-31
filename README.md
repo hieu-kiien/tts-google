@@ -8,8 +8,8 @@
 
 ## 🌟 Tính Năng Chính (Core Features)
 
-- 🔑 **Mô hình BYOK (Bring Your Own Key)**: Nhập Gemini API Key cá nhân của bạn, lưu trữ an toàn tuyệt đối trong **Windows Credential Manager** thông qua crate `keyring`. JavaScript Frontend và Log không bao giờ tiếp xúc với API key.
-- ⚡ **Gemini Interactions API**: Sử dụng endpoint chính thức `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` với model `gemini-3.1-flash-tts-preview` hoặc `gemini-2.5-flash-preview-tts`.
+- 🔑 **Mô hình BYOK (Bring Your Own Key)**: Nhập Gemini API Key cá nhân trong giao diện người dùng, truyền qua kênh IPC cục bộ của Tauri tới Rust backend và lưu giữ an toàn trong **Windows Credential Manager** thông qua crate `keyring`. API Key không được lưu trữ dưới dạng văn bản thuần (plaintext) trong Local Storage, SQLite hay Log tệp.
+- ⚡ **Gemini Interactions API**: Sử dụng endpoint chính thức `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` hỗ trợ linh hoạt các model `gemini-3.1-flash-tts-preview` và `gemini-2.5-flash-preview-tts`.
 - 🎧 **Audio Pipeline Chuẩn 24kHz**: Trích xuất dữ liệu âm thanh Raw PCM 24.000 Hz, 16-bit Mono signed little-endian và đóng gói thành file RIFF WAV bằng crate `hound`.
 - ✂️ **Phân Đoạn Văn Bản Tiếng Việt (Text Chunker)**: Chia nhỏ văn bản theo thứ tự ưu tiên Heading -> Paragraph -> Sentence -> Clause mà không cắt giữa từ, giữ nguyên dấu câu và thứ tự tự nhiên.
 - 🔄 **Hàng Đợi Tuần Tự (Sequential Queue)**: Đảm bảo độ ổn định cho Free Tier với concurrency = 1, hỗ trợ Truncated Exponential Backoff với randomized jitter, xử lý `Retry-After` header và tự động tạm dừng khi chạm quota ngày.
@@ -21,7 +21,7 @@
 ## 🏗️ Kiến Trúc Hệ Thống (System Architecture)
 
 > [!NOTE]
-> Ứng dụng áp dụng mô hình kiến trúc Async Actor Pattern kết hợp Tauri IPC Bridge cách ly hoàn toàn Frontend UI với tầng xử lý backend Rust.
+> Ứng dụng áp dụng mô hình kiến trúc Async Actor Pattern kết hợp Tauri IPC Bridge giữa Frontend UI và tầng xử lý backend Rust. Các mô hình Gemini TTS hiện ở trạng thái Preview.
 
 ```mermaid
 flowchart TD

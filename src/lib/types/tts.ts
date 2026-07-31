@@ -1,4 +1,4 @@
-export type QueueState = "Idle" | "Running" | "Paused" | "Cancelled";
+export type QueueState = "Idle" | "Running" | "Paused" | "Completed" | "Cancelled" | "Failed";
 
 export interface ProjectRecord {
   id: string;
@@ -127,4 +127,17 @@ export interface PronunciationRule {
   id: string;
   find: string;
   replace: string;
+}
+
+export interface AppSettings {
+  concurrency: number;
+}
+
+export interface QuotaMetrics {
+  today_requests: number;
+  today_chars: number;
+  today_rate_limits: number;
+  avg_latency_ms: number;
+  total_requests: number;
+  total_chars: number;
 }

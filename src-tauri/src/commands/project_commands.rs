@@ -7,7 +7,10 @@ use crate::storage::segment_repo::SegmentRepository;
 use crate::text::chunker::chunk_vietnamese_text_by_mode;
 use crate::text::prompt_builder::{build_tts_prompt, PromptStyleOptions};
 use crate::text::fingerprint::{compute_segment_fingerprint, SegmentFingerprintInput};
-
+use crate::security::input_validation::{
+    validate_project_name, validate_source_text, validate_voice, validate_preset, validate_chunk_mode
+};
+use crate::models::registry::{validate_tts_model, MODEL_GEMINI_31_FLASH_TTS};
 
 #[tauri::command]
 pub fn create_project(
@@ -16,8 +19,23 @@ pub fn create_project(
     voice: String,
     preset: String,
     chunk_mode: Option<String>,
+    model: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ProjectRecord, String> {
+    validate_project_name(&name)?;
+    validate_source_text(&source_text)?;
+    validate_voice(&voice)?;
+    validate_preset(&preset)?;
+    validate_chunk_mode(chunk_mode.as_deref())?;
+
+    let selected_model = match model {
+        Some(m) if !m.trim().is_empty() => {
+            validate_tts_model(&m)?;
+            m
+        }
+        _ => MODEL_GEMINI_31_FLASH_TTS.to_string(),
+    };
+
     let db = state.db.as_ref().ok_or("Database not initialized")?;
     let proj_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -26,12 +44,12 @@ pub fn create_project(
         id: proj_id.clone(),
         name,
         source_text: source_text.clone(),
-        model: "gemini-3.1-flash-tts-preview".to_string(),
+        model: selected_model.clone(),
         voice: voice.clone(),
         preset: preset.clone(),
         pacing: "Bình thường".to_string(),
         pronunciation_notes: None,
-        output_directory: state.output_dir.clone(),
+        output_directory: state.output_dir.to_string_lossy().to_string(),
         status: "draft".to_string(),
         created_at: now.clone(),
         updated_at: now.clone(),
@@ -39,7 +57,6 @@ pub fn create_project(
 
     ProjectRepository::create_project(db, &proj)?;
 
-    // Chunk text according to selected chunking mode
     let mode_str = chunk_mode.as_deref().unwrap_or("auto");
     let chunks = chunk_vietnamese_text_by_mode(&source_text, mode_str);
     let prompt_opts = PromptStyleOptions {
@@ -54,7 +71,7 @@ pub fn create_project(
             let fp = compute_segment_fingerprint(&SegmentFingerprintInput {
                 text: &c.text,
                 voice: &voice,
-                model: "gemini-3.1-flash-tts-preview",
+                model: &selected_model,
                 speaking_rate: 1.0,
                 pitch_shift: 0.0,
                 volume_gain_db: 0.0,
@@ -180,9 +197,9 @@ pub fn update_segment_text(
     let db = state.db.as_ref().ok_or("Database not initialized")?;
 
     let proj = ProjectRepository::get_project_by_id(db, &project_id)?;
-    let (voice, preset) = proj
-        .map(|p| (p.voice, p.preset))
-        .unwrap_or_else(|| ("Kore".to_string(), "Tự nhiên".to_string()));
+    let (voice, preset, model) = proj
+        .map(|p| (p.voice, p.preset, p.model))
+        .unwrap_or_else(|| ("Kore".to_string(), "Tự nhiên".to_string(), MODEL_GEMINI_31_FLASH_TTS.to_string()));
 
     let prompt_opts = PromptStyleOptions {
         style_preset: preset,
@@ -193,7 +210,7 @@ pub fn update_segment_text(
     let fp = compute_segment_fingerprint(&SegmentFingerprintInput {
         text: &text,
         voice: &voice,
-        model: "gemini-3.1-flash-tts-preview",
+        model: &model,
         speaking_rate: 1.0,
         pitch_shift: 0.0,
         volume_gain_db: 0.0,
@@ -239,6 +256,8 @@ pub fn merge_segments(
 
 #[tauri::command]
 pub fn chunk_text_preview(text: String, mode: Option<String>) -> Result<Vec<crate::text::chunker::TextChunk>, String> {
+    validate_source_text(&text)?;
+    validate_chunk_mode(mode.as_deref())?;
     let mode_str = mode.as_deref().unwrap_or("auto");
     Ok(crate::text::chunker::chunk_vietnamese_text_by_mode(&text, mode_str))
 }
@@ -250,12 +269,15 @@ pub fn rechunk_project_segments(
     source_text: String,
     mode: Option<String>,
 ) -> Result<Vec<SegmentRecord>, String> {
+    validate_source_text(&source_text)?;
+    validate_chunk_mode(mode.as_deref())?;
+
     let state = app.state::<AppState>();
     let db = state.db.as_ref().ok_or("Database not initialized")?;
     let proj = ProjectRepository::get_project_by_id(db, &project_id)?;
-    let (voice, preset) = proj
-        .map(|p| (p.voice, p.preset))
-        .unwrap_or_else(|| ("Kore".to_string(), "Tự nhiên".to_string()));
+    let (voice, preset, model) = proj
+        .map(|p| (p.voice, p.preset, p.model))
+        .unwrap_or_else(|| ("Kore".to_string(), "Tự nhiên".to_string(), MODEL_GEMINI_31_FLASH_TTS.to_string()));
 
     let mode_str = mode.as_deref().unwrap_or("auto");
     let chunks = crate::text::chunker::chunk_vietnamese_text_by_mode(&source_text, mode_str);
@@ -276,7 +298,7 @@ pub fn rechunk_project_segments(
             let fp = compute_segment_fingerprint(&SegmentFingerprintInput {
                 text: &c.text,
                 voice: &voice,
-                model: "gemini-3.1-flash-tts-preview",
+                model: &model,
                 speaking_rate: 1.0,
                 pitch_shift: 0.0,
                 volume_gain_db: 0.0,
