@@ -48,7 +48,7 @@ pub struct SegmentRecord {
     pub finished_at: Option<i64>,
     pub lease_owner: Option<String>,
     pub lease_expires_at: Option<i64>,
-    pub last_error_code: Option<String>,
+    pub last_error_code: Option<crate::error::AppErrorCode>,
     pub last_error_message: Option<String>,
     pub cancel_requested: bool,
     pub state_revision: u64,

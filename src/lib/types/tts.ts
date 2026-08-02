@@ -87,7 +87,7 @@ export interface SegmentRecord {
   finished_at?: number | null;
   lease_owner?: string | null;
   lease_expires_at?: number | null;
-  last_error_code?: string | null;
+  last_error_code?: AppErrorCode | null;
   last_error_message?: string | null;
   cancel_requested: boolean;
   state_revision: number;
@@ -101,7 +101,7 @@ export interface QueueSnapshot {
   completed_segments: number;
   failed_segments: number;
   pending_segments: number;
-  snapshot_revision: number;
+  active_workers: number;
 }
 
 export interface QueueProgressEvent {
@@ -125,18 +125,21 @@ export interface ExportReadiness {
   output_directory: string;
 }
 
-export type AppErrorCode = 
-  | 'AUTH_INVALID'
-  | 'RATE_LIMITED'
-  | 'DAILY_QUOTA_EXHAUSTED'
-  | 'NETWORK_UNAVAILABLE'
-  | 'VALIDATION_FAILED'
-  | 'DATABASE_ERROR'
-  | 'AUDIO_CORRUPT'
-  | 'CONTENT_FILTERED'
-  | 'FILE_SYSTEM_ERROR'
-  | 'QUEUE_ERROR'
-  | 'INTERNAL_ERROR';
+export const APP_ERROR_CODES = [
+  'AUTH_INVALID',
+  'RATE_LIMITED',
+  'DAILY_QUOTA_EXHAUSTED',
+  'NETWORK_UNAVAILABLE',
+  'VALIDATION_FAILED',
+  'DATABASE_ERROR',
+  'AUDIO_CORRUPT',
+  'CONTENT_FILTERED',
+  'FILE_SYSTEM_ERROR',
+  'QUEUE_ERROR',
+  'INTERNAL_ERROR',
+] as const;
+
+export type AppErrorCode = typeof APP_ERROR_CODES[number];
 
 export interface CommandError {
   code: AppErrorCode;

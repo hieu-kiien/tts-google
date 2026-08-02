@@ -1,18 +1,6 @@
-import type { AppErrorCode, CommandError } from "../types/tts";
+import { APP_ERROR_CODES, type AppErrorCode, type CommandError } from "../types/tts";
 
-const VALID_APP_ERROR_CODES: Set<string> = new Set([
-  'AUTH_INVALID',
-  'RATE_LIMITED',
-  'DAILY_QUOTA_EXHAUSTED',
-  'NETWORK_UNAVAILABLE',
-  'VALIDATION_FAILED',
-  'DATABASE_ERROR',
-  'AUDIO_CORRUPT',
-  'CONTENT_FILTERED',
-  'FILE_SYSTEM_ERROR',
-  'QUEUE_ERROR',
-  'INTERNAL_ERROR',
-]);
+const VALID_APP_ERROR_CODES = new Set<string>(APP_ERROR_CODES);
 
 function toAppErrorCode(codeStr: unknown): AppErrorCode {
   if (typeof codeStr === 'string' && VALID_APP_ERROR_CODES.has(codeStr)) {

@@ -41,6 +41,7 @@ describe("TanStack Virtualizer 10,000 Segment Scalability Benchmark", () => {
       removeEventListener: () => {},
     } as unknown as Element;
 
+    const virtualizerStartTime = performance.now();
     const virtualizerStore = createVirtualizer({
       count: segments.length,
       getScrollElement: () => mockScrollContainer,
@@ -57,12 +58,14 @@ describe("TanStack Virtualizer 10,000 Segment Scalability Benchmark", () => {
     });
 
     const instance = get(virtualizerStore);
+    const virtualItems = instance.getVirtualItems();
+    const virtualizerDuration = performance.now() - virtualizerStartTime;
+
     expect(instance.options.count).toBe(10000);
     expect(instance.getTotalSize()).toBe(1400000); // 10,000 items * 140px = 1,400,000px
-
-    const virtualItems = instance.getVirtualItems();
     expect(virtualItems.length).toBeLessThanOrEqual(20);
     expect(virtualItems.length).toBeGreaterThan(0);
+    expect(virtualizerDuration).toBeLessThan(100);
   });
 
   it("should enforce strict AppErrorCode type safety", () => {

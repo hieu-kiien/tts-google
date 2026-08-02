@@ -36,9 +36,39 @@ impl AppErrorCode {
     }
 }
 
+impl std::str::FromStr for AppErrorCode {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "AUTH_INVALID" | "401_UNAUTHORIZED" => Ok(Self::AuthInvalid),
+            "RATE_LIMITED" | "429_RATE_LIMITED" => Ok(Self::RateLimited),
+            "DAILY_QUOTA_EXHAUSTED" | "429_QUOTA_EXHAUSTED" => Ok(Self::DailyQuotaExhausted),
+            "NETWORK_UNAVAILABLE" => Ok(Self::NetworkUnavailable),
+            "VALIDATION_FAILED" => Ok(Self::ValidationFailed),
+            "DATABASE_ERROR" => Ok(Self::DatabaseError),
+            "AUDIO_CORRUPT" | "WAV_WRITE_ERROR" => Ok(Self::AudioCorrupt),
+            "CONTENT_FILTERED" | "400_CONTENT_FILTERED" => Ok(Self::ContentFiltered),
+            "FILE_SYSTEM_ERROR" => Ok(Self::FileSystemError),
+            "QUEUE_ERROR" => Ok(Self::QueueError),
+            "INTERNAL_ERROR" | "API_ERROR" => Ok(Self::InternalError),
+            _ => Err(()),
+        }
+    }
+}
+
 impl rusqlite::types::ToSql for AppErrorCode {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
         Ok(rusqlite::types::ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl rusqlite::types::FromSql for AppErrorCode {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let text = value.as_str()?;
+        text.parse::<Self>().map_err(|_| {
+            rusqlite::types::FromSqlError::Other(format!("Invalid AppErrorCode: {}", text).into())
+        })
     }
 }
 

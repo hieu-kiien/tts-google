@@ -841,5 +841,16 @@ mod tests {
             chunks.len(),
             elapsed
         );
+        assert!(!chunks.is_empty(), "Chunker must produce output");
+        assert!(
+            chunks.len() >= 5000,
+            "Expected at least 5000 chunks, got {}",
+            chunks.len()
+        );
+        assert!(
+            elapsed.as_millis() < 500,
+            "Chunking took {:?}, exceeding 500ms",
+            elapsed
+        );
     }
 }
