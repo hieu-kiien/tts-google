@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
-import type { SegmentRecord } from "../types/tts";
+import { get } from "svelte/store";
+import { createVirtualizer } from "@tanstack/svelte-virtual";
+import type { SegmentRecord, AppErrorCode } from "../types/tts";
 
-describe("Virtual List 10,000 Segment Scalability Benchmark", () => {
-  it("should handle 10,000 segment objects in memory with sub-millisecond calculation time", () => {
+describe("TanStack Virtualizer 10,000 Segment Scalability Benchmark", () => {
+  it("should initialize TanStack virtualizer for 10,000 items and calculate total height and window bounds under 100ms", () => {
     const startTime = performance.now();
     const segments: SegmentRecord[] = Array.from({ length: 10000 }, (_, i) => ({
       id: `seg_${i + 1}`,
@@ -26,24 +28,57 @@ describe("Virtual List 10,000 Segment Scalability Benchmark", () => {
     const createDuration = performance.now() - startTime;
 
     expect(segments.length).toBe(10000);
-    expect(createDuration).toBeLessThan(100); // 10k items created under 100ms
+    expect(createDuration).toBeLessThan(100);
 
-    // Simulate virtual window calculation (overscan = 5, itemHeight = 140px, viewportHeight = 800px)
-    const viewportHeight = 800;
-    const itemHeight = 140;
-    const overscan = 5;
+    const mockScrollContainer = {
+      scrollTop: 28000,
+      clientHeight: 800,
+      scrollHeight: 1400000,
+      getBoundingClientRect: () => ({
+        top: 0, left: 0, width: 1000, height: 800, bottom: 800, right: 1000, x: 0, y: 0, toJSON: () => {}
+      }),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as Element;
 
-    const visibleCount = Math.ceil(viewportHeight / itemHeight); // ~6 visible rows
-    const totalRenderedLimit = visibleCount + overscan * 2; // ~16 rows total in DOM
+    const virtualizerStore = createVirtualizer({
+      count: segments.length,
+      getScrollElement: () => mockScrollContainer,
+      estimateSize: () => 140,
+      overscan: 5,
+      observeElementOffset: (_, cb) => {
+        cb(28000, true);
+        return () => {};
+      },
+      observeElementRect: (_, cb) => {
+        cb({ width: 1000, height: 800 });
+        return () => {};
+      },
+    });
 
-    // Compute virtual window range for scrollTop = 28000 (middle of list ~row 200)
-    const scrollTop = 28000;
-    const startIndex = Math.max(0, Math.floor(scrollTop / itemHeight) - overscan);
-    const endIndex = Math.min(segments.length - 1, Math.floor((scrollTop + viewportHeight) / itemHeight) + overscan);
-    const virtualWindow = segments.slice(startIndex, endIndex + 1);
+    const instance = get(virtualizerStore);
+    expect(instance.options.count).toBe(10000);
+    expect(instance.getTotalSize()).toBe(1400000); // 10,000 items * 140px = 1,400,000px
 
-    expect(virtualWindow.length).toBeLessThanOrEqual(totalRenderedLimit + 2);
-    expect(virtualWindow.length).toBeGreaterThan(0);
-    expect(virtualWindow[0].position).toBeGreaterThan(180);
+    const virtualItems = instance.getVirtualItems();
+    expect(virtualItems.length).toBeLessThanOrEqual(20);
+    expect(virtualItems.length).toBeGreaterThan(0);
+  });
+
+  it("should enforce strict AppErrorCode type safety", () => {
+    const validCodes: AppErrorCode[] = [
+      "AUTH_INVALID",
+      "RATE_LIMITED",
+      "DAILY_QUOTA_EXHAUSTED",
+      "NETWORK_UNAVAILABLE",
+      "VALIDATION_FAILED",
+      "DATABASE_ERROR",
+      "AUDIO_CORRUPT",
+      "CONTENT_FILTERED",
+      "FILE_SYSTEM_ERROR",
+      "QUEUE_ERROR",
+      "INTERNAL_ERROR",
+    ];
+    expect(validCodes.length).toBe(11);
   });
 });

@@ -612,7 +612,7 @@ impl ProjectRepository {
         output_bytes_len: u64,
         duration_ms: u64,
         next_retry_at: Option<i64>,
-        error_code: Option<&str>,
+        error_code: Option<crate::error::AppErrorCode>,
         error_message: Option<&str>,
     ) -> Result<bool, String> {
         let now_ms = Utc::now().timestamp_millis();
@@ -646,7 +646,7 @@ impl ProjectRepository {
                     duration_ms as i64,
                     now_ms,
                     next_retry_at,
-                    error_code,
+                    error_code.map(|c| c.as_str()),
                     error_message,
                     now_iso,
                     segment_id,
@@ -684,7 +684,7 @@ impl ProjectRepository {
         attempts: u32,
         audio_path: Option<&str>,
         duration_ms: u64,
-        error_code: Option<&str>,
+        error_code: Option<crate::error::AppErrorCode>,
         error_message: Option<&str>,
     ) -> Result<(), String> {
         let now = Utc::now().to_rfc3339();
@@ -696,7 +696,7 @@ impl ProjectRepository {
                     attempts,
                     audio_path,
                     duration_ms as i64,
-                    error_code,
+                    error_code.map(|c| c.as_str()),
                     error_message,
                     now,
                     segment_id

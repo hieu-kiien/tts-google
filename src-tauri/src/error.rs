@@ -75,6 +75,9 @@ pub enum AppError {
     AudioCorrupt(String),
 
     #[error("{0}")]
+    ContentFiltered(String),
+
+    #[error("{0}")]
     FileSystem(String),
 
     #[error("{0}")]
@@ -94,6 +97,7 @@ impl AppError {
             Self::ValidationFailed(_) => AppErrorCode::ValidationFailed,
             Self::DatabaseError(_) => AppErrorCode::DatabaseError,
             Self::AudioCorrupt(_) => AppErrorCode::AudioCorrupt,
+            Self::ContentFiltered(_) => AppErrorCode::ContentFiltered,
             Self::FileSystem(_) => AppErrorCode::FileSystemError,
             Self::Queue(_) => AppErrorCode::QueueError,
             Self::InternalError(_) => AppErrorCode::InternalError,
@@ -116,6 +120,7 @@ impl AppError {
             Self::ValidationFailed(msg) => msg.clone(),
             Self::DatabaseError(msg) => msg.clone(),
             Self::AudioCorrupt(msg) => msg.clone(),
+            Self::ContentFiltered(msg) => msg.clone(),
             Self::FileSystem(msg) => msg.clone(),
             Self::Queue(msg) => msg.clone(),
             Self::InternalError(msg) => msg.clone(),

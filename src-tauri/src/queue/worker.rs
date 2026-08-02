@@ -540,7 +540,7 @@ impl QueueService {
                     0,
                     0,
                     None,
-                    Some("AUDIO_CORRUPT"),
+                    Some(crate::error::AppErrorCode::AudioCorrupt),
                     Some(&e.to_string()),
                 );
                 Err(e.to_string())
@@ -564,15 +564,15 @@ impl QueueService {
         let is_daily_quota = err.code.contains("RateLimitedDaily") || err.message.contains("quota");
         let is_rate_limit = err.is_rate_limit || is_daily_quota;
 
-        let (friendly_msg, err_code_str) = if is_unauthorized {
+        let (friendly_msg, app_err_code) = if is_unauthorized {
             (
                 "Gemini API Key không hợp lệ hoặc đã bị vô hiệu hóa. Vui lòng kiểm tra lại cấu hình Key.".to_string(),
-                "AUTH_INVALID",
+                crate::error::AppErrorCode::AuthInvalid,
             )
         } else if is_daily_quota {
             (
                 "Hạn ngạch sử dụng Google API trong ngày đã hết. Hàng đợi đã tạm dừng.".to_string(),
-                "DAILY_QUOTA_EXHAUSTED",
+                crate::error::AppErrorCode::DailyQuotaExhausted,
             )
         } else if err.is_rate_limit {
             (
@@ -580,17 +580,17 @@ impl QueueService {
                     "Đã đạt giới hạn tốc độ yêu cầu (Rate Limit 429). Đang chờ thử lại sau {}s...",
                     err.retry_after_secs.unwrap_or(10)
                 ),
-                "RATE_LIMITED",
+                crate::error::AppErrorCode::RateLimited,
             )
         } else if err.code.contains("ContentFiltered") {
             (
                 "Đoạn văn bản bị từ chối bởi bộ lọc an toàn của Google.".to_string(),
-                "CONTENT_FILTERED",
+                crate::error::AppErrorCode::ContentFiltered,
             )
         } else {
             (
                 format!("Lỗi kết nối API Google: {}", err.message),
-                "INTERNAL_ERROR",
+                crate::error::AppErrorCode::InternalError,
             )
         };
 
@@ -599,7 +599,7 @@ impl QueueService {
             task.id,
             task.attempt_count + 1,
             friendly_msg,
-            err_code_str
+            app_err_code.as_str()
         );
 
         if is_rate_limit {
@@ -631,7 +631,7 @@ impl QueueService {
                 0,
                 0,
                 Some(Utc::now().timestamp_millis()),
-                Some(err_code_str),
+                Some(app_err_code),
                 Some(&friendly_msg),
             );
 
@@ -687,7 +687,7 @@ impl QueueService {
                 0,
                 0,
                 Some(next_retry),
-                Some(err_code_str),
+                Some(app_err_code),
                 Some(&friendly_msg),
             );
         } else {
@@ -701,7 +701,7 @@ impl QueueService {
                 0,
                 0,
                 None,
-                Some(err_code_str),
+                Some(app_err_code),
                 Some(&friendly_msg),
             );
         }
@@ -806,7 +806,7 @@ impl QueueService {
                         0,
                         0,
                         None,
-                        Some("AUTH_INVALID"),
+                        Some(crate::error::AppErrorCode::AuthInvalid),
                         Some("Missing Gemini API Key"),
                     );
                     final_outcome = WorkerOutcome::Failed("Missing Gemini API Key".to_string());

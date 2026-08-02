@@ -139,7 +139,7 @@ export type AppErrorCode =
   | 'INTERNAL_ERROR';
 
 export interface CommandError {
-  code: AppErrorCode | string;
+  code: AppErrorCode;
   message: string;
   retryable: boolean;
   diagnostic_id?: string | null;
