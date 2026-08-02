@@ -1,5 +1,5 @@
+use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use std::io::Cursor;
-use hound::{WavReader, WavSpec, WavWriter, SampleFormat};
 use tracing::info;
 
 pub const DEFAULT_SAMPLE_RATE: u32 = 24000;
@@ -59,6 +59,75 @@ pub fn write_pcm_to_wav_file(pcm_bytes: &[u8], target_path: &str) -> Result<(), 
     Ok(())
 }
 
+/// Validates that a file is a valid 24kHz mono 16-bit WAV with audio samples.
+pub fn validate_wav_file(wav_path: &str) -> Result<u64, String> {
+    let reader =
+        WavReader::open(wav_path).map_err(|e| format!("Invalid WAV file {}: {}", wav_path, e))?;
+    let spec = reader.spec();
+    if spec.channels != DEFAULT_CHANNELS
+        || spec.sample_rate != DEFAULT_SAMPLE_RATE
+        || spec.bits_per_sample != DEFAULT_BITS_PER_SAMPLE
+    {
+        return Err(format!(
+            "WAV spec mismatch in {}: {}ch {}Hz {}bits",
+            wav_path, spec.channels, spec.sample_rate, spec.bits_per_sample
+        ));
+    }
+    let duration_samples = reader.duration();
+    if duration_samples == 0 {
+        return Err(format!("WAV file {} contains 0 audio frames", wav_path));
+    }
+    let duration_ms = (duration_samples as u64 * 1000) / spec.sample_rate as u64;
+    Ok(duration_ms)
+}
+
+/// Writes PCM bytes atomically using .tmp file -> hound validation -> quarantine corrupted file -> atomic rename.
+pub fn write_pcm_to_wav_atomic(pcm_bytes: &[u8], target_path: &str) -> Result<u64, String> {
+    let target = std::path::Path::new(target_path);
+    let parent = target
+        .parent()
+        .ok_or_else(|| "Invalid target path parent".to_string())?;
+
+    let quarantine_dir = parent.join("quarantine");
+    let _ = std::fs::create_dir_all(&quarantine_dir);
+
+    let file_name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("audio.wav");
+    let temp_path = parent.join(format!("{}.tmp", file_name));
+    let temp_path_str = temp_path.to_string_lossy().to_string();
+
+    write_pcm_to_wav_file(pcm_bytes, &temp_path_str)?;
+
+    let duration_ms = match validate_wav_file(&temp_path_str) {
+        Ok(dur) => dur,
+        Err(err) => {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(format!("Validation of generated WAV failed: {}", err));
+        }
+    };
+
+    if target.exists() {
+        if validate_wav_file(target_path).is_ok() {
+            let _ = std::fs::remove_file(&temp_path);
+            return Ok(duration_ms);
+        } else {
+            let quarantine_file = quarantine_dir.join(file_name);
+            let _ = std::fs::rename(target, &quarantine_file);
+        }
+    }
+
+    std::fs::rename(&temp_path, target).map_err(|e| {
+        format!(
+            "Failed atomic rename from {:?} to {}: {}",
+            temp_path, target_path, e
+        )
+    })?;
+
+    Ok(duration_ms)
+}
+
 /// Generates PCM silence samples for a given duration in milliseconds.
 pub fn generate_silence_pcm(duration_ms: u64) -> Vec<u8> {
     let num_samples = (DEFAULT_SAMPLE_RATE as u64 * duration_ms) / 1000;
@@ -68,8 +137,8 @@ pub fn generate_silence_pcm(duration_ms: u64) -> Vec<u8> {
 
 /// Reads duration in milliseconds from a WAV file path.
 pub fn get_wav_duration_ms(wav_path: &str) -> Result<u64, String> {
-    let reader = WavReader::open(wav_path)
-        .map_err(|e| format!("Failed to open WAV file: {}", e))?;
+    let reader =
+        WavReader::open(wav_path).map_err(|e| format!("Failed to open WAV file: {}", e))?;
     let spec = reader.spec();
     let num_samples = reader.duration() as u64;
     if spec.sample_rate == 0 {
@@ -105,8 +174,27 @@ mod tests {
     #[test]
     fn test_silence_generation() {
         let silence = generate_silence_pcm(1000); // 1 second
-        // 24000 samples * 2 bytes = 48000 bytes
+                                                  // 24000 samples * 2 bytes = 48000 bytes
         assert_eq!(silence.len(), 48000);
         assert!(silence.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_write_pcm_to_wav_atomic() {
+        let temp_dir = std::env::temp_dir().join("tts_atomic_test");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let wav_path = temp_dir.join("test_output.wav");
+        let wav_path_str = wav_path.to_string_lossy().to_string();
+
+        let dummy_pcm = vec![0u8; 4800]; // 100ms 24kHz mono PCM
+        let dur =
+            write_pcm_to_wav_atomic(&dummy_pcm, &wav_path_str).expect("Atomic WAV write failed");
+        assert_eq!(dur, 100);
+        assert!(wav_path.exists());
+
+        // Validate file content
+        assert!(validate_wav_file(&wav_path_str).is_ok());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

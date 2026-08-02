@@ -1,5 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { projectState } from "./projectState.svelte";
+import { toastStore } from "./toasts.svelte";
+import { getErrorMessage } from "../utils/errorUtils";
 
 // Player & Audio Runtime State using Svelte 5 runes with Instant Streaming & Autoplay support
 
@@ -118,12 +120,17 @@ class PlayerState {
     }
   }
 
-  togglePlay() {
+  async togglePlay() {
     if (!this.audioElement || !this.currentPlayingAudioUrl) return;
     if (this.isPlaying) {
       this.pause();
     } else {
-      this.audioElement.play().catch(console.error);
+      try {
+        await this.audioElement.play();
+      } catch (err: unknown) {
+        this.isPlaying = false;
+        toastStore.showError("Không thể phát âm thanh: " + getErrorMessage(err));
+      }
     }
   }
 
@@ -152,9 +159,29 @@ class PlayerState {
   setPlaybackRate(rate: number) {
     this.playbackRate = rate;
     if (this.audioElement) {
-      this.playbackRate = rate;
       this.audioElement.playbackRate = rate;
     }
+  }
+
+  dispose() {
+    if (this.audioElement) {
+      this.audioElement.pause();
+      this.audioElement.onplay = null;
+      this.audioElement.oncanplay = null;
+      this.audioElement.onpause = null;
+      this.audioElement.onended = null;
+      this.audioElement.ontimeupdate = null;
+      this.audioElement = null;
+    }
+    this.isPlaying = false;
+    this.currentTime = 0;
+    this.duration = 0;
+    this.currentPlayingSegmentId = null;
+    this.currentPlayingAudioUrl = null;
+  }
+
+  reset() {
+    this.dispose();
   }
 }
 

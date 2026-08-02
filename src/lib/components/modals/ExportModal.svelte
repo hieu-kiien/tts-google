@@ -3,8 +3,9 @@
   import { projectState } from "../../state/projectState.svelte";
   import type { SegmentRecord } from "../../types/tts";
   import { toastStore } from "../../state/toasts.svelte";
-  import { invoke } from "@tauri-apps/api/core";
   import { getErrorMessage } from "../../utils/errorUtils";
+  import { writeBinaryFile, exportProjectSrt, mergeProjectAudio, readAudioDataUrl } from "../../api/audioClient";
+  import { saveMasterWavDialog, saveSrtFileDialog } from "../../api/dialogClient";
 
   import { convertWavBufferToMp3 } from "../../utils/mp3Exporter";
 
@@ -40,7 +41,7 @@
     try {
       const ext = fileFormat === "mp3" ? "mp3" : "wav";
       const defaultName = `${projectState.currentProject?.name || "TTS_Master"}.${ext}`.replace(/[\\/:*?"<>|]/g, "_");
-      const path = await invoke<string | null>("save_master_wav_dialog", { defaultFilename: defaultName });
+      const path = await saveMasterWavDialog(defaultName);
       if (path) {
         customMasterPath = path;
         toastStore.showSuccess(`Đã chọn đường dẫn lưu Master ${ext.toUpperCase()}: ${path}`);
@@ -53,7 +54,7 @@
   async function handlePickSrtPath() {
     try {
       const defaultName = `${projectState.currentProject?.name || "TTS_Subtitle"}.srt`.replace(/[\\/:*?"<>|]/g, "_");
-      const path = await invoke<string | null>("save_srt_file_dialog", { defaultFilename: defaultName });
+      const path = await saveSrtFileDialog(defaultName);
       if (path) {
         customSrtPath = path;
         toastStore.showSuccess(`Đã chọn đường dẫn lưu SRT: ${path}`);
@@ -99,7 +100,7 @@
       if (!masterPathToUse) {
         const ext = fileFormat === "mp3" ? "mp3" : "wav";
         const defaultName = `${projectState.currentProject.name || "TTS_Master"}.${ext}`.replace(/[\\/:*?"<>|]/g, "_");
-        masterPathToUse = await invoke<string | null>("save_master_wav_dialog", { defaultFilename: defaultName });
+        masterPathToUse = await saveMasterWavDialog(defaultName);
       }
 
       if (!masterPathToUse) {
@@ -113,17 +114,17 @@
         ? masterPathToUse.replace(/\.mp3$/i, ".tmp.wav") 
         : masterPathToUse;
 
-      const mergeRes = await invoke<{ output_path: string; total_duration_ms: number }>("merge_project_audio", {
-        projectId: projectState.currentProject.id,
-        silenceGapMs: interChapterPauseMs,
-        customOutputPath: tempWavPath
-      });
+      const mergeRes = await mergeProjectAudio(
+        projectState.currentProject.id,
+        interChapterPauseMs,
+        tempWavPath
+      );
 
       let finalMasterPath = mergeRes.output_path || tempWavPath;
 
       if (fileFormat === "mp3") {
         toastStore.showInfo(`Đang nén tệp WAV sang MP3 (${mp3Bitrate} kbps)...`);
-        const dataUrl = await invoke<string>("read_audio_data_url", { path: finalMasterPath });
+        const dataUrl = await readAudioDataUrl(finalMasterPath);
         const base64Data = dataUrl.split(",")[1] || dataUrl;
         const wavBuffer = base64ToArrayBuffer(base64Data);
         
@@ -131,7 +132,7 @@
         const mp3Base64 = uint8ArrayToBase64(mp3Bytes);
         
         const targetMp3Path = masterPathToUse.endsWith(".mp3") ? masterPathToUse : `${masterPathToUse}.mp3`;
-        await invoke("write_binary_file", { targetPath: targetMp3Path, base64Data: mp3Base64 });
+        await writeBinaryFile(targetMp3Path, mp3Base64);
         finalMasterPath = targetMp3Path;
       }
 
@@ -139,16 +140,16 @@
         let srtPathToUse = customSrtPath;
         if (!srtPathToUse) {
           const defaultSrtName = `${projectState.currentProject.name || "TTS_Subtitle"}.srt`.replace(/[\\/:*?"<>|]/g, "_");
-          srtPathToUse = await invoke<string | null>("save_srt_file_dialog", { defaultFilename: defaultSrtName });
+          srtPathToUse = await saveSrtFileDialog(defaultSrtName);
         }
 
         if (srtPathToUse) {
           toastStore.showInfo("Đang tạo file phụ đề SRT...");
-          await invoke("export_project_srt", {
-            projectId: projectState.currentProject.id,
-            silenceGapMs: interChapterPauseMs,
-            customOutputPath: srtPathToUse
-          });
+          await exportProjectSrt(
+            projectState.currentProject.id,
+            interChapterPauseMs,
+            srtPathToUse
+          );
         }
       }
 

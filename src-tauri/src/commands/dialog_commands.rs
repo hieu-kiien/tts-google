@@ -22,7 +22,7 @@ pub fn pick_output_folder() -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn save_master_wav_dialog(default_filename: Option<String>) -> Result<Option<String>, String> {
     let default_name = default_filename.unwrap_or_else(|| "TTS_Master_Audio.wav".to_string());
-    
+
     let file = FileDialog::new()
         .set_title("Lưu File Master Audio (WAV)")
         .set_file_name(&default_name)
@@ -68,7 +68,9 @@ pub fn save_vtt_file_dialog(default_filename: Option<String>) -> Result<Option<S
 }
 
 #[tauri::command]
-pub fn save_segment_audio_dialog(default_filename: Option<String>) -> Result<Option<String>, String> {
+pub fn save_segment_audio_dialog(
+    default_filename: Option<String>,
+) -> Result<Option<String>, String> {
     let default_name = default_filename.unwrap_or_else(|| "Segment_Audio.wav".to_string());
 
     let file = FileDialog::new()

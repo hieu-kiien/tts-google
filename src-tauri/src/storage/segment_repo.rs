@@ -12,7 +12,14 @@ impl SegmentRepository {
         prompt: &str,
         fingerprint: &str,
     ) -> Result<(), String> {
-        ProjectRepository::update_segment_text(db, project_id, segment_id, text, prompt, fingerprint)
+        ProjectRepository::update_segment_text(
+            db,
+            project_id,
+            segment_id,
+            text,
+            prompt,
+            fingerprint,
+        )
     }
 
     pub fn split_segment(

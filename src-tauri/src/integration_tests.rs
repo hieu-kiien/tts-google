@@ -1,17 +1,23 @@
 #[cfg(test)]
 mod tests {
-    use crate::audio::pcm_wav::{pcm_to_wav_bytes, write_pcm_to_wav_file, get_wav_duration_ms};
+    use crate::audio::pcm_wav::{get_wav_duration_ms, pcm_to_wav_bytes, write_pcm_to_wav_file};
     use crate::audio::wav_merger::merge_wav_files;
+    use crate::models::registry::{
+        validate_tts_model, MODEL_GEMINI_25_FLASH_TTS, MODEL_GEMINI_31_FLASH_TTS,
+    };
+    use crate::security::input_validation::{
+        validate_api_key, validate_project_name, validate_source_text,
+    };
+    use crate::security::path_policy::{
+        resolve_existing_read_target, resolve_write_target, validate_base64_payload_size,
+    };
     use crate::storage::db::DatabaseManager;
-    use crate::storage::project_repo::{ProjectRepository, ProjectRecord, SegmentRecord};
+    use crate::storage::project_repo::{ProjectRecord, ProjectRepository, SegmentRecord};
     use crate::text::chunker::chunk_vietnamese_text;
     use crate::text::fingerprint::{compute_segment_fingerprint, SegmentFingerprintInput};
     use crate::text::normalizer::VietnameseNormalizer;
     use crate::text::srt_exporter::generate_srt_subtitles;
     use crate::text::vtt_exporter::generate_vtt_subtitles;
-    use crate::security::path_policy::{resolve_write_target, resolve_existing_read_target, validate_base64_payload_size};
-    use crate::security::input_validation::{validate_project_name, validate_source_text, validate_api_key};
-    use crate::models::registry::{validate_tts_model, MODEL_GEMINI_31_FLASH_TTS, MODEL_GEMINI_25_FLASH_TTS};
     use chrono::Utc;
     use std::path::Path;
 
@@ -62,8 +68,8 @@ mod tests {
         ProjectRepository::create_project(&db, &proj)
             .expect("Failed to create project record in DB");
 
-        let projects = ProjectRepository::list_projects(&db)
-            .expect("Failed to query projects from DB");
+        let projects =
+            ProjectRepository::list_projects(&db).expect("Failed to query projects from DB");
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "E2E Test Project");
@@ -126,6 +132,9 @@ mod tests {
             state_revision: 1,
             output_size: 9600,
             voice: None,
+            synthesis_status: Some("success".to_string()),
+            review_status: Some("unreviewed".to_string()),
+            reviewed_output_fingerprint: None,
         };
 
         let segments = vec![seg_record];
@@ -145,7 +154,10 @@ mod tests {
         let temp_dir = std::env::temp_dir();
 
         // 1. Disallow path traversal '..'
-        let traversal_path = temp_dir.join("../outside.wav").to_string_lossy().to_string();
+        let traversal_path = temp_dir
+            .join("../outside.wav")
+            .to_string_lossy()
+            .to_string();
         let res = resolve_write_target(&[temp_dir.as_path()], &traversal_path, &["wav"]);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Path traversal"));
@@ -157,13 +169,20 @@ mod tests {
         assert!(res.unwrap_err().contains("not allowed"));
 
         // 3. Allow uppercase extension (.WAV)
-        let uppercase_path = temp_dir.join("audio_test.WAV").to_string_lossy().to_string();
+        let uppercase_path = temp_dir
+            .join("audio_test.WAV")
+            .to_string_lossy()
+            .to_string();
         let res = resolve_write_target(&[temp_dir.as_path()], &uppercase_path, &["wav"]);
         assert!(res.is_ok());
 
         // 4. Disallow path outside allowed roots
         let outside_dir = Path::new("C:/Windows/System32/config.txt");
-        let res = resolve_existing_read_target(&[temp_dir.as_path()], outside_dir.to_str().unwrap(), &["txt"]);
+        let res = resolve_existing_read_target(
+            &[temp_dir.as_path()],
+            outside_dir.to_str().unwrap(),
+            &["txt"],
+        );
         assert!(res.is_err());
     }
 

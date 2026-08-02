@@ -1,7 +1,7 @@
 pub mod api;
 pub mod audio;
-pub mod error;
 pub mod commands;
+pub mod error;
 pub mod models;
 pub mod queue;
 pub mod security;
@@ -12,12 +12,10 @@ pub mod text;
 #[cfg(test)]
 pub mod integration_tests;
 
-
+use queue::worker::QueueService;
+use state::app_state::AppState;
 use std::sync::Arc;
 use tauri::Manager;
-use state::app_state::AppState;
-use queue::worker::QueueService;
-
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -40,7 +38,11 @@ pub fn run() {
                 output_dir: app_state_base.output_dir.clone(),
                 temp_dir: app_state_base.temp_dir.clone(),
                 queue_service: Some(queue_service),
-                concurrency: std::sync::atomic::AtomicU32::new(app_state_base.concurrency.load(std::sync::atomic::Ordering::Relaxed)),
+                concurrency: std::sync::atomic::AtomicU32::new(
+                    app_state_base
+                        .concurrency
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                ),
                 total_requests: std::sync::atomic::AtomicU64::new(0),
                 total_chars: std::sync::atomic::AtomicU64::new(0),
                 rate_limit_hits: std::sync::atomic::AtomicU64::new(0),
@@ -69,6 +71,7 @@ pub fn run() {
             commands::project_commands::normalize_vietnamese_text,
             commands::project_commands::update_segment_text,
             commands::project_commands::update_segment_voice,
+            commands::project_commands::update_segment_review_status,
             commands::project_commands::update_project_voice,
             commands::project_commands::split_segment,
             commands::project_commands::merge_segments,
@@ -98,6 +101,7 @@ pub fn run() {
             commands::queue_commands::cancel_project,
             commands::queue_commands::get_queue_snapshot,
             commands::queue_commands::check_export_readiness,
+            commands::queue_commands::requeue_segment,
             commands::settings_commands::get_app_settings,
             commands::settings_commands::update_app_settings,
             commands::settings_commands::get_quota_metrics

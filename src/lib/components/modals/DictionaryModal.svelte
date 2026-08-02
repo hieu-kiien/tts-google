@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PronunciationRule } from "../../types/tts";
-  import { invoke } from "@tauri-apps/api/core";
+  import { synthesizePreviewAudio } from "../../api/audioClient";
   import { playerState } from "../../state/playerState.svelte";
   import { projectState } from "../../state/projectState.svelte";
   import { toastStore } from "../../state/toasts.svelte";
@@ -48,16 +48,13 @@
     try {
       isPreviewing = true;
       toastStore.showInfo(`Đang tạo âm thanh nghe thử phát âm: "${textToPreview}"...`);
-      const res = await invoke<{ data_url: string; duration_ms: number }>(
-        "synthesize_preview_audio",
-        {
-          text: `Cách đọc: ${textToPreview}`,
-          voice: projectState.currentProject?.voice || "Kore",
-          model: projectState.currentProject?.model || "gemini-3.1-flash-tts-preview",
-          speed: 1.0,
-          pitch: 1.0
-        }
-      );
+      const res = await synthesizePreviewAudio({
+        text: `Cách đọc: ${textToPreview}`,
+        voice: projectState.currentProject?.voice || "Kore",
+        model: projectState.currentProject?.model || "gemini-3.1-flash-tts-preview",
+        speed: 1.0,
+        pitch: 1.0
+      });
       playerState.playUrl(res.data_url, "dict_preview");
       toastStore.showSuccess(`Đang phát âm thanh nghe thử phát âm "${textToPreview}"`);
     } catch (err: unknown) {

@@ -52,9 +52,16 @@ impl From<&str> for AppError {
 impl From<crate::api::interactions_client::ApiError> for AppError {
     fn from(e: crate::api::interactions_client::ApiError) -> Self {
         match e {
-            crate::api::interactions_client::ApiError::Unauthorized => AppError::Auth(e.to_string()),
-            crate::api::interactions_client::ApiError::NetworkError(_) => AppError::Api(e.to_string()),
-            crate::api::interactions_client::ApiError::RateLimited(_) | crate::api::interactions_client::ApiError::RateLimitedDaily => AppError::Api(e.to_string()),
+            crate::api::interactions_client::ApiError::Unauthorized => {
+                AppError::Auth(e.to_string())
+            }
+            crate::api::interactions_client::ApiError::NetworkError(_) => {
+                AppError::Api(e.to_string())
+            }
+            crate::api::interactions_client::ApiError::RateLimited(_)
+            | crate::api::interactions_client::ApiError::RateLimitedDaily => {
+                AppError::Api(e.to_string())
+            }
             _ => AppError::Api(e.to_string()),
         }
     }

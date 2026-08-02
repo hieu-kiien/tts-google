@@ -1,5 +1,5 @@
 use rusqlite::params;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 use crate::storage::db::DatabaseManager;
@@ -26,11 +26,13 @@ impl AudioCache {
     /// Returns Some(file_path) if cached and file still exists on disk.
     pub fn lookup(db: &DatabaseManager, cache_key: &str) -> Option<String> {
         let result = db.with_conn(|conn| {
-            let path: Option<String> = conn.query_row(
-                "SELECT file_path FROM audio_cache WHERE cache_key = ?1",
-                params![cache_key],
-                |row| row.get(0),
-            ).optional()?;
+            let path: Option<String> = conn
+                .query_row(
+                    "SELECT file_path FROM audio_cache WHERE cache_key = ?1",
+                    params![cache_key],
+                    |row| row.get(0),
+                )
+                .optional()?;
             Ok(path)
         });
 
@@ -55,7 +57,10 @@ impl AudioCache {
                 } else {
                     // File deleted from disk, remove stale cache entry
                     let _ = db.with_conn_mut(|conn| {
-                        conn.execute("DELETE FROM audio_cache WHERE cache_key = ?1", params![cache_key])?;
+                        conn.execute(
+                            "DELETE FROM audio_cache WHERE cache_key = ?1",
+                            params![cache_key],
+                        )?;
                         Ok(())
                     });
                     info!("Audio cache STALE (file missing): {}", &cache_key[..16]);
@@ -87,7 +92,15 @@ impl AudioCache {
                     cache_key, model, voice, file_path,
                     duration_ms, byte_size, created_at, last_accessed_at
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-                params![cache_key, model, voice, file_path, duration_ms, byte_size, now_ms],
+                params![
+                    cache_key,
+                    model,
+                    voice,
+                    file_path,
+                    duration_ms,
+                    byte_size,
+                    now_ms
+                ],
             )?;
             Ok(())
         })?;
@@ -104,19 +117,18 @@ impl AudioCache {
                 |row| row.get(0),
             )?;
             Ok(size as u64)
-        }).unwrap_or(0)
+        })
+        .unwrap_or(0)
     }
 
     /// Get number of cached entries.
     pub fn entry_count(db: &DatabaseManager) -> u64 {
         db.with_conn(|conn| {
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM audio_cache",
-                [],
-                |row| row.get(0),
-            )?;
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM audio_cache", [], |row| row.get(0))?;
             Ok(count as u64)
-        }).unwrap_or(0)
+        })
+        .unwrap_or(0)
     }
 
     /// Evict least recently accessed entries until total cache is under max_bytes.
@@ -157,7 +169,10 @@ impl AudioCache {
             evicted += 1;
         }
 
-        info!("Audio cache LRU eviction: removed {} entries, freed {} bytes", evicted, freed);
+        info!(
+            "Audio cache LRU eviction: removed {} entries, freed {} bytes",
+            evicted, freed
+        );
         Ok(evicted)
     }
 }

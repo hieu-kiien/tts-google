@@ -1,16 +1,17 @@
-use tauri::{Manager, State};
-use uuid::Uuid;
-use chrono::Utc;
+use crate::models::registry::{validate_tts_model, MODEL_GEMINI_31_FLASH_TTS};
+use crate::security::input_validation::{
+    validate_chunk_mode, validate_preset, validate_project_name, validate_source_text,
+    validate_voice,
+};
 use crate::state::app_state::AppState;
-use crate::storage::project_repo::{ProjectRepository, ProjectRecord, SegmentRecord};
+use crate::storage::project_repo::{ProjectRecord, ProjectRepository, SegmentRecord};
 use crate::storage::segment_repo::SegmentRepository;
 use crate::text::chunker::chunk_vietnamese_text_by_mode;
-use crate::text::prompt_builder::{build_tts_prompt, PromptStyleOptions};
 use crate::text::fingerprint::{compute_segment_fingerprint, SegmentFingerprintInput};
-use crate::security::input_validation::{
-    validate_project_name, validate_source_text, validate_voice, validate_preset, validate_chunk_mode
-};
-use crate::models::registry::{validate_tts_model, MODEL_GEMINI_31_FLASH_TTS};
+use crate::text::prompt_builder::{build_tts_prompt, PromptStyleOptions};
+use chrono::Utc;
+use tauri::{Manager, State};
+use uuid::Uuid;
 
 #[tauri::command]
 pub fn create_project(
@@ -107,6 +108,9 @@ pub fn create_project(
                 state_revision: 1,
                 output_size: 0,
                 voice: None,
+                synthesis_status: Some("pending".to_string()),
+                review_status: Some("unreviewed".to_string()),
+                reviewed_output_fingerprint: None,
             }
         })
         .collect();
@@ -128,7 +132,10 @@ pub fn delete_project(project_id: String, state: State<'_, AppState>) -> Result<
 }
 
 #[tauri::command]
-pub fn delete_projects_batch(project_ids: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
+pub fn delete_projects_batch(
+    project_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let db = state.db.as_ref().ok_or("Database not initialized")?;
     ProjectRepository::delete_projects_batch(db, &project_ids)
 }
@@ -176,14 +183,19 @@ pub fn move_segment(
 }
 
 #[tauri::command]
-pub fn get_project_segments(project_id: String, state: State<'_, AppState>) -> Result<Vec<SegmentRecord>, String> {
+pub fn get_project_segments(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<SegmentRecord>, String> {
     let db = state.db.as_ref().ok_or("Database not initialized")?;
     ProjectRepository::get_segments_for_project(db, &project_id)
 }
 
 #[tauri::command]
 pub fn normalize_vietnamese_text(text: String) -> Result<String, String> {
-    Ok(crate::text::normalizer::VietnameseNormalizer::normalize(&text))
+    Ok(crate::text::normalizer::VietnameseNormalizer::normalize(
+        &text,
+    ))
 }
 
 #[tauri::command]
@@ -199,7 +211,13 @@ pub fn update_segment_text(
     let proj = ProjectRepository::get_project_by_id(db, &project_id)?;
     let (voice, preset, model) = proj
         .map(|p| (p.voice, p.preset, p.model))
-        .unwrap_or_else(|| ("Kore".to_string(), "Tự nhiên".to_string(), MODEL_GEMINI_31_FLASH_TTS.to_string()));
+        .unwrap_or_else(|| {
+            (
+                "Kore".to_string(),
+                "Tự nhiên".to_string(),
+                MODEL_GEMINI_31_FLASH_TTS.to_string(),
+            )
+        });
 
     let prompt_opts = PromptStyleOptions {
         style_preset: preset,
@@ -255,11 +273,16 @@ pub fn merge_segments(
 }
 
 #[tauri::command]
-pub fn chunk_text_preview(text: String, mode: Option<String>) -> Result<Vec<crate::text::chunker::TextChunk>, String> {
+pub fn chunk_text_preview(
+    text: String,
+    mode: Option<String>,
+) -> Result<Vec<crate::text::chunker::TextChunk>, String> {
     validate_source_text(&text)?;
     validate_chunk_mode(mode.as_deref())?;
     let mode_str = mode.as_deref().unwrap_or("auto");
-    Ok(crate::text::chunker::chunk_vietnamese_text_by_mode(&text, mode_str))
+    Ok(crate::text::chunker::chunk_vietnamese_text_by_mode(
+        &text, mode_str,
+    ))
 }
 
 #[tauri::command]
@@ -277,7 +300,13 @@ pub fn rechunk_project_segments(
     let proj = ProjectRepository::get_project_by_id(db, &project_id)?;
     let (voice, preset, model) = proj
         .map(|p| (p.voice, p.preset, p.model))
-        .unwrap_or_else(|| ("Kore".to_string(), "Tự nhiên".to_string(), MODEL_GEMINI_31_FLASH_TTS.to_string()));
+        .unwrap_or_else(|| {
+            (
+                "Kore".to_string(),
+                "Tự nhiên".to_string(),
+                MODEL_GEMINI_31_FLASH_TTS.to_string(),
+            )
+        });
 
     let mode_str = mode.as_deref().unwrap_or("auto");
     let chunks = crate::text::chunker::chunk_vietnamese_text_by_mode(&source_text, mode_str);
@@ -334,6 +363,9 @@ pub fn rechunk_project_segments(
                 state_revision: 1,
                 output_size: 0,
                 voice: None,
+                synthesis_status: Some("pending".to_string()),
+                review_status: Some("unreviewed".to_string()),
+                reviewed_output_fingerprint: None,
             }
         })
         .collect();
@@ -351,4 +383,20 @@ pub fn update_segment_voice(
 ) -> Result<(), String> {
     let db = state.db.as_ref().ok_or("Database not initialized")?;
     ProjectRepository::update_segment_voice(db, &project_id, &segment_id, voice.as_deref())
+}
+
+#[tauri::command]
+pub fn update_segment_review_status(
+    segment_id: String,
+    review_status: String,
+    reviewed_output_fingerprint: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.as_ref().ok_or("Database not initialized")?;
+    ProjectRepository::update_segment_review_status(
+        db,
+        &segment_id,
+        &review_status,
+        reviewed_output_fingerprint.as_deref(),
+    )
 }

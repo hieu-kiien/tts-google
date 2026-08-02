@@ -3,9 +3,10 @@
   import { uiState } from "../state/uiState.svelte";
   import { playerState } from "../state/playerState.svelte";
   import { toastStore } from "../state/toasts.svelte";
-  import { invoke } from "@tauri-apps/api/core";
   import type { SegmentIssue } from "../types/tts";
   import { getErrorMessage } from "../utils/errorUtils";
+  import { updateSegmentVoice, updateProjectVoice, updateSegmentText } from "../api/projectClient";
+  import { synthesizePreviewAudio } from "../api/audioClient";
 
   let voiceSearch = $state("");
   let customTestText = $state("");
@@ -25,13 +26,14 @@
     { id: "Fenrir", name: "Fenrir", tags: ["Nam", "Mạnh mẽ", "Cuốn hút"], desc: "Đọc sách kỹ năng, tự truyện, thuyết minh" },
   ];
 
-  let filteredVoices = $derived.by(() => {
-    let list = voices;
-    if (voiceSearch.trim()) {
-      const q = voiceSearch.toLowerCase();
-      list = list.filter(v => v.name.toLowerCase().includes(q) || v.tags.some(t => t.toLowerCase().includes(q)));
-    }
-    return list;
+  const filteredVoices = $derived.by(() => {
+    if (!voiceSearch.trim()) return voices;
+    const query = voiceSearch.toLowerCase();
+    return voices.filter(v => 
+      v.name.toLowerCase().includes(query) || 
+      v.desc.toLowerCase().includes(query) ||
+      v.tags.some(t => t.toLowerCase().includes(query))
+    );
   });
 
   const activeSegment = $derived(projectState.activeSegment);
@@ -41,11 +43,7 @@
       activeSegment.voice = voiceId;
       if (activeSegment.audio_path) activeSegment.status = 'stale';
       try {
-        await invoke("update_segment_voice", {
-          projectId: projectState.currentProject.id,
-          segmentId: activeSegment.id,
-          voice: voiceId,
-        });
+        await updateSegmentVoice(projectState.currentProject.id, activeSegment.id, voiceId);
         toastStore.showSuccess(`Đã gán giọng đọc ${voiceId} cho Đoạn #${activeSegment.position}`);
       } catch (err: unknown) {
         toastStore.showError(`Lỗi lưu giọng đọc segment: ${getErrorMessage(err)}`);
@@ -58,10 +56,7 @@
         }
       }
       try {
-        await invoke("update_project_voice", {
-          projectId: projectState.currentProject.id,
-          voiceId: voiceId,
-        });
+        await updateProjectVoice(projectState.currentProject.id, voiceId);
         toastStore.showSuccess(`Đã lưu giọng đọc toàn bộ dự án: ${voiceId}`);
       } catch (err: unknown) {
         console.warn("Lỗi lưu giọng đọc vào DB:", getErrorMessage(err));
@@ -93,16 +88,13 @@
       toastStore.showInfo(`Đang nạp mẫu giọng đọc ${voiceId}...`);
       const previewText = customTestText.trim() || voiceSampleTexts[voiceId] || "Xin chào! Đây là mẫu giọng đọc tiếng Việt chất lượng cao từ Gemini API.";
       
-      const res = await invoke<{ data_url: string; duration_ms: number }>(
-        "synthesize_preview_audio",
-        {
-          voice: voiceId,
-          text: previewText,
-          model: projectState.currentProject?.model || "gemini-3.1-flash-tts-preview",
-          speed: speakingRate,
-          pitch: 1.0
-        }
-      );
+      const res = await synthesizePreviewAudio({
+        voice: voiceId,
+        text: previewText,
+        model: projectState.currentProject?.model || "gemini-3.1-flash-tts-preview",
+        speed: speakingRate,
+        pitch: 1.0
+      });
 
       voiceSampleCache.set(voiceId, res.data_url);
       playerState.playUrl(res.data_url, `preview_voice_${voiceId}`);
@@ -121,10 +113,7 @@
       
       if (projectState.currentProject.id && projectState.currentProject.voice) {
         try {
-          await invoke("update_project_voice", {
-            projectId: projectState.currentProject.id,
-            voiceId: projectState.currentProject.voice,
-          });
+          await updateProjectVoice(projectState.currentProject.id, projectState.currentProject.voice);
         } catch (err: unknown) {
           console.warn("Lỗi update_project_voice:", getErrorMessage(err));
         }
@@ -134,11 +123,7 @@
         activeSegment.prompt = `[Speed: ${speakingRate}x, Expressiveness: ${expressiveness}, Formality: ${formality}] ${activeSegment.prompt || 'Đọc tự nhiên, truyền cảm'}`;
         if (projectState.currentProject.id) {
           try {
-            await invoke("update_segment_text", {
-              projectId: projectState.currentProject.id,
-              segmentId: activeSegment.id,
-              text: activeSegment.text
-            });
+            await updateSegmentText(projectState.currentProject.id, activeSegment.id, activeSegment.text);
           } catch {
             // ignore if project draft
           }

@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64};
-use crate::security::keyring_store::CredentialStore;
 use crate::api::interactions_client::GeminiClient;
-use crate::storage::db::DatabaseManager;
 use crate::queue::worker::QueueService;
+use crate::security::keyring_store::CredentialStore;
+use crate::storage::db::DatabaseManager;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::Arc;
 
 pub struct AppState {
     pub credentials: Arc<CredentialStore>,
@@ -89,7 +89,12 @@ fn dirs_or_fallback() -> PathBuf {
         .map(|p| PathBuf::from(p).join("auto_tts_desktop"))
         .unwrap_or_else(|_| {
             std::env::var("HOME")
-                .map(|h| PathBuf::from(h).join(".local").join("share").join("auto_tts_desktop"))
+                .map(|h| {
+                    PathBuf::from(h)
+                        .join(".local")
+                        .join("share")
+                        .join("auto_tts_desktop")
+                })
                 .unwrap_or_else(|_| std::env::temp_dir().join("auto_tts_desktop"))
         })
 }

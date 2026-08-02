@@ -1,10 +1,10 @@
 <script lang="ts">
   import { getErrorMessage } from "./lib/utils/errorUtils";
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
 
-  import type { ProjectRecord, QueueSnapshot, QueueProgressEvent } from "./lib/types/tts";
+  import { isSegmentStatus, type ProjectRecord, type QueueSnapshot, type QueueProgressEvent } from "./lib/types/tts";
   import { toastStore } from "./lib/state/toasts.svelte";
   import { uiState } from "./lib/state/uiState.svelte";
   import { projectState } from "./lib/state/projectState.svelte";
@@ -12,6 +12,7 @@
 
   import { createProject, listProjects, getProjectSegments } from "./lib/api/projectClient";
   import { enqueueProject, pauseProject, getQueueSnapshot, resumeProject, cancelProject } from "./lib/api/queueClient";
+  import { getApiKeyStatus, saveApiKey, testApiConnection } from "./lib/api/settingsClient";
 
   import Header from "./lib/components/Header.svelte";
   import ProjectSidebar from "./lib/components/ProjectSidebar.svelte";
@@ -57,8 +58,14 @@
       switch (e.key.toLowerCase()) {
         case 's':
           e.preventDefault();
-          projectState.flushPendingSaves();
-          toastStore.showSuccess("Đã lưu tiến độ dự án thành công.");
+          (async () => {
+            const success = await projectState.flushPendingSaves();
+            if (success) {
+              toastStore.showSuccess("Đã lưu tiến độ dự án thành công.");
+            } else {
+              toastStore.showError("Có lỗi xảy ra khi lưu một số đoạn văn. Thay đổi chưa được lưu xuống ổ đĩa.");
+            }
+          })();
           break;
         case 'i':
           e.preventDefault();
@@ -99,7 +106,7 @@
 
   async function checkKeyStatus() {
     try {
-      const res = await invoke<{ configured: boolean }>("get_api_key_status");
+      const res = await getApiKeyStatus();
       keyConfigured = res.configured;
     } catch (err: unknown) {
       console.warn("Key status check:", getErrorMessage(err));
@@ -112,10 +119,7 @@
       return;
     }
     try {
-      const res = await invoke<{ configured: boolean }>("save_api_key", {
-        key: apiKeyInput,
-        remember: rememberKey,
-      });
+      const res = await saveApiKey(apiKeyInput, rememberKey);
       keyConfigured = res.configured;
       apiKeyInput = "";
       uiState.showApiKeyModal = false;
@@ -128,9 +132,7 @@
   async function handleTestConnection() {
     try {
       isTestingKey = true;
-      const res = await invoke<string>("test_api_connection", {
-        testKey: apiKeyInput.trim() ? apiKeyInput : null,
-      });
+      const res = await testApiConnection(apiKeyInput.trim() ? apiKeyInput : null);
       toastStore.showSuccess(res);
     } catch (err: unknown) {
       toastStore.showError(getErrorMessage(err));
@@ -151,6 +153,8 @@
       toastStore.showError("Chưa có dự án nào được chọn.");
       return;
     }
+
+    await projectState.flushPendingSaves();
 
     try {
       if (projectState.currentProject?.id) {
@@ -193,28 +197,40 @@
     }
   }
 
+  function handleResize() {
+    if (typeof window !== "undefined") {
+      const isNarrow = window.innerWidth < 1024;
+      uiState.isNarrowWindow = isNarrow;
+      if (isNarrow) {
+        uiState.showSidebar = false;
+        uiState.showInspector = false;
+      }
+    }
+  }
+
   onMount(() => {
     checkKeyStatus();
+    handleResize();
 
-    let unlistenProgress: UnlistenFn | undefined;
-    let unlistenSnapshot: UnlistenFn | undefined;
+    let isMounted = true;
+    const unlistenFns: UnlistenFn[] = [];
 
-    listen<QueueProgressEvent>("queue-progress", (event) => {
+    const handleQueueProgress = (event: { payload: QueueProgressEvent }) => {
       if (!projectState.currentProject || event.payload.project_id !== projectState.currentProject.id) {
         return;
       }
       const progress = event.payload;
-      // Update individual segment status if segment_id is present
       if (progress.segment_id && projectState.segments) {
         const segIdx = projectState.segments.findIndex(s => s.id === progress.segment_id);
         if (segIdx !== -1) {
-          projectState.segments[segIdx].status = progress.status as any;
+          if (isSegmentStatus(progress.status)) {
+            projectState.segments[segIdx].status = progress.status;
+          }
           if (progress.error_message) {
             projectState.segments[segIdx].error_message = progress.error_message;
           }
         }
       }
-      // Incrementally update completed count on existing snapshot
       if (queueSnapshot) {
         queueSnapshot = {
           ...queueSnapshot,
@@ -222,30 +238,50 @@
           completed_segments: progress.completed_segments,
         };
       }
-    }).then(fn => { unlistenProgress = fn; });
+    };
 
-    listen<QueueSnapshot>("queue-snapshot", (event) => {
+    const handleQueueSnapshot = (event: { payload: QueueSnapshot }) => {
       if (projectState.currentProject && event.payload.project_id === projectState.currentProject.id) {
         queueSnapshot = event.payload;
       }
-    }).then(fn => { unlistenSnapshot = fn; });
+    };
+
+    const registerListener = async (
+      registration: Promise<UnlistenFn>
+    ): Promise<void> => {
+      try {
+        const unlisten = await registration;
+        if (isMounted) {
+          unlistenFns.push(unlisten);
+        } else {
+          unlisten();
+        }
+      } catch (err) {
+        console.warn("Không thể đăng ký queue listener:", err);
+      }
+    };
+
+    void registerListener(
+      listen<QueueProgressEvent>("queue-progress", handleQueueProgress)
+    );
+    void registerListener(
+      listen<QueueSnapshot>("queue-snapshot", handleQueueSnapshot)
+    );
 
     // Load projects from database on startup
     (async () => {
       try {
-        const dbProjects = await invoke<ProjectRecord[]>("list_projects");
+        const dbProjects = await listProjects();
         if (dbProjects.length > 0) {
           projectState.projects = dbProjects;
           projectState.currentProject = dbProjects[0];
-          // Load segments for the first project
           try {
-            const segs = await invoke<import("./lib/types/tts").SegmentRecord[]>("get_project_segments", { projectId: dbProjects[0].id });
+            const segs = await getProjectSegments(dbProjects[0].id);
             projectState.segments = segs;
           } catch {
             projectState.segments = [];
           }
         } else {
-          // No projects in DB — show library for user to create one
           uiState.activeView = "library";
         }
       } catch (err) {
@@ -254,11 +290,58 @@
       }
     })();
 
+    // === CLOSE HANDLER: flush pending edits before window closes ===
+    const appWindow = getCurrentWindow();
+    let unlistenClose: (() => void) | null = null;
+    appWindow.onCloseRequested(async (event) => {
+      if (!projectState.hasPendingSaves) {
+        return; // No pending saves, allow close
+      }
+
+      event.preventDefault();
+
+      try {
+        const success = await projectState.flushPendingSaves();
+        if (success) {
+          await appWindow.destroy();
+        } else {
+          // Some saves failed — ask user
+          const forceClose = confirm(
+            'Một số đoạn chưa lưu được. Bạn có muốn đóng ứng dụng không?\n\n' +
+            '• OK = Đóng không lưu\n' +
+            '• Cancel = Quay lại ứng dụng'
+          );
+          if (forceClose) {
+            await appWindow.destroy();
+          }
+        }
+      } catch (error) {
+        console.error('Error flushing saves on close:', error);
+        const forceClose = confirm(
+          'Lỗi khi lưu dữ liệu: ' + getErrorMessage(error) + '\n\n' +
+          'Bạn có muốn đóng ứng dụng không?'
+        );
+        if (forceClose) {
+          await appWindow.destroy();
+        }
+      }
+    }).then(fn => { unlistenClose = fn; });
+
     window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handleResize);
+
     return () => {
-      if (unlistenProgress) unlistenProgress();
-      if (unlistenSnapshot) unlistenSnapshot();
+      isMounted = false;
+      if (unlistenClose) unlistenClose();
+      for (const unlisten of unlistenFns.splice(0)) {
+        try {
+          unlisten();
+        } catch (err) {
+          console.warn("Không thể hủy queue listener:", err);
+        }
+      }
       window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleResize);
     };
   });
 </script>

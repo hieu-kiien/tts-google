@@ -1,10 +1,10 @@
 <script lang="ts">
   import { uiState } from "../../state/uiState.svelte";
   import { projectState } from "../../state/projectState.svelte";
-  import { invoke } from "@tauri-apps/api/core";
   import { toastStore } from "../../state/toasts.svelte";
   import { getErrorMessage } from "../../utils/errorUtils";
-  import { createProject, getProjectSegments } from "../../api/projectClient";
+  import { createProject, getProjectSegments, chunkTextPreview, rechunkProjectSegments } from "../../api/projectClient";
+  import { readTextFileDialog } from "../../api/dialogClient";
 
   let inputMode = $state<"file" | "text">("file");
   let currentStep = $state(1);
@@ -33,7 +33,7 @@
       return;
     }
     try {
-      const chunks = await invoke<any[]>("chunk_text_preview", { text: text, mode: "auto" });
+      const chunks = await chunkTextPreview(text as string, "auto");
       chunkCount = chunks.length;
     } catch {
       chunkCount = Math.ceil(text.length / 500);
@@ -44,7 +44,7 @@
   async function handlePickFile() {
     try {
       isReadingFile = true;
-      const result = await invoke<{ file_path: string; content: string } | null>("read_text_file_dialog");
+      const result = await readTextFileDialog() as { file_path: string; content: string } | null;
       if (result) {
         fileName = result.file_path.split(/[/\\]/).pop() || result.file_path;
         fileSize = `${(result.content.length / 1024).toFixed(1)} KB`;
@@ -97,11 +97,7 @@
       if (projectState.currentProject) {
         // Re-chunk current project
         toastStore.showInfo("Đang cập nhật và tự động tách đoạn cho dự án hiện tại...");
-        const updatedSegs = await invoke<any[]>("rechunk_project_segments", {
-          projectId: projectState.currentProject.id,
-          sourceText: importedContent,
-          mode: "auto"
-        });
+        const updatedSegs = await rechunkProjectSegments(projectState.currentProject.id, importedContent, "auto");
         projectState.currentProject.source_text = importedContent;
         projectState.segments = updatedSegs;
         toastStore.showSuccess(`Đã nhập và tự động tách thành ${updatedSegs.length} đoạn audio!`);

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getAppSettings, updateAppSettings } from "../api/settingsClient";
+  import { getErrorMessage } from "../utils/errorUtils";
 
   interface Props {
     isOpen: boolean;
@@ -23,8 +24,8 @@
     try {
       const settings = await getAppSettings();
       concurrency = settings.concurrency || 1;
-    } catch (e: any) {
-      errorMessage = e?.message || "Không thể tải cấu hình cài đặt.";
+    } catch (e: unknown) {
+      errorMessage = getErrorMessage(e) || "Không thể tải cấu hình cài đặt.";
     }
   }
 
@@ -39,8 +40,8 @@
         saveSuccess = false;
         onClose();
       }, 800);
-    } catch (e: any) {
-      errorMessage = e?.message || "Không thể lưu cài đặt.";
+    } catch (e: unknown) {
+      errorMessage = getErrorMessage(e) || "Không thể lưu cài đặt.";
     } finally {
       isSaving = false;
     }

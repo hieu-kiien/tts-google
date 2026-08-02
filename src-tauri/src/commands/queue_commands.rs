@@ -1,9 +1,8 @@
-use tauri::State;
-use serde::{Deserialize, Serialize};
-use crate::state::app_state::AppState;
 use crate::queue::worker::QueueSnapshot;
+use crate::state::app_state::AppState;
 use crate::storage::project_repo::ProjectRepository;
-
+use serde::{Deserialize, Serialize};
+use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommandError {
@@ -45,12 +44,15 @@ pub async fn enqueue_project(
         diagnostic_id: None,
     })?;
 
-    queue.enqueue_project(project_id).await.map_err(|e| CommandError {
-        code: "ENQUEUE_FAILED".to_string(),
-        message: e,
-        retryable: true,
-        diagnostic_id: None,
-    })
+    queue
+        .enqueue_project(project_id)
+        .await
+        .map_err(|e| CommandError {
+            code: "ENQUEUE_FAILED".to_string(),
+            message: e,
+            retryable: true,
+            diagnostic_id: None,
+        })
 }
 
 #[tauri::command]
@@ -110,7 +112,10 @@ pub async fn get_queue_snapshot(
         diagnostic_id: None,
     })?;
 
-    queue.get_queue_snapshot(project_id).await.map_err(Into::into)
+    queue
+        .get_queue_snapshot(project_id)
+        .await
+        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -125,7 +130,8 @@ pub async fn check_export_readiness(
         diagnostic_id: None,
     })?;
 
-    let segs = ProjectRepository::get_segments_for_project(db, &project_id).map_err(Into::<CommandError>::into)?;
+    let segs = ProjectRepository::get_segments_for_project(db, &project_id)
+        .map_err(Into::<CommandError>::into)?;
     let total = segs.len();
     if total == 0 {
         return Ok(ExportReadiness {
@@ -139,7 +145,10 @@ pub async fn check_export_readiness(
 
     let successful = segs.iter().filter(|s| s.status == "success").count();
     let failed = segs.iter().filter(|s| s.status == "failed").count();
-    let processing_or_queued = segs.iter().filter(|s| s.status == "processing" || s.status == "queued" || s.status == "retry_wait").count();
+    let processing_or_queued = segs
+        .iter()
+        .filter(|s| s.status == "processing" || s.status == "queued" || s.status == "retry_wait")
+        .count();
 
     let state_str = if processing_or_queued > 0 {
         "queue_running"
@@ -159,3 +168,33 @@ pub async fn check_export_readiness(
         output_directory: state.output_dir.to_string_lossy().to_string(),
     })
 }
+
+#[tauri::command]
+pub async fn requeue_segment(
+    project_id: String,
+    segment_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let db = state.db.as_ref().ok_or_else(|| CommandError {
+        code: "DB_UNAVAILABLE".to_string(),
+        message: "Database not initialized".to_string(),
+        retryable: false,
+        diagnostic_id: None,
+    })?;
+
+    ProjectRepository::requeue_segment(db, &project_id, &segment_id)
+        .map_err(|e| CommandError {
+            code: "REQUEUE_FAILED".to_string(),
+            message: e,
+            retryable: false,
+            diagnostic_id: None,
+        })?;
+        
+    // Optionally trigger queue if it's paused or we just want to wake it up
+    if let Some(queue) = state.queue_service.as_ref() {
+        let _ = queue.resume_project(project_id).await;
+    }
+
+    Ok(())
+}
+

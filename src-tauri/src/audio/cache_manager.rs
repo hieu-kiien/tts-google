@@ -1,4 +1,4 @@
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -17,7 +17,14 @@ impl AudioCacheManager {
     }
 
     pub fn compute_key(text: &str, voice: &str, speed: f32, pitch: f32, format: &str) -> String {
-        let raw = format!("{}|{}|{:.2}|{:.2}|{}", text.trim(), voice.trim(), speed, pitch, format.trim());
+        let raw = format!(
+            "{}|{}|{:.2}|{:.2}|{}",
+            text.trim(),
+            voice.trim(),
+            speed,
+            pitch,
+            format.trim()
+        );
         let mut hasher = Sha256::new();
         hasher.update(raw.as_bytes());
         format!("{:x}", hasher.finalize())
@@ -28,7 +35,11 @@ impl AudioCacheManager {
         if path.exists() {
             match fs::read(&path) {
                 Ok(bytes) => {
-                    info!("Audio Cache HIT for key [{}] ({}) bytes", &key[..8], bytes.len());
+                    info!(
+                        "Audio Cache HIT for key [{}] ({}) bytes",
+                        &key[..8],
+                        bytes.len()
+                    );
                     Some(bytes)
                 }
                 Err(e) => {

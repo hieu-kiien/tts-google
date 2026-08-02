@@ -19,7 +19,14 @@ export interface ProjectRecord {
   is_pinned?: boolean;
 }
 
+export type SegmentStatus = "pending" | "queued" | "processing" | "success" | "approved" | "retry_wait" | "failed" | "stale";
+
+export function isSegmentStatus(status: string): status is SegmentStatus {
+  return ["pending", "queued", "processing", "success", "approved", "retry_wait", "failed", "stale"].includes(status);
+}
+
 export type ReviewStatus = "unreviewed" | "approved" | "needs_fix";
+export type SynthesisStatus = "pending" | "queued" | "processing" | "success" | "retry_wait" | "failed" | "stale";
 
 export type SegmentIssue = 
   | "mispronunciation"
@@ -53,12 +60,14 @@ export interface SegmentRecord {
   voice?: string | null;
   model?: string | null;
   status: "pending" | "queued" | "processing" | "success" | "approved" | "retry_wait" | "failed" | "stale";
+  synthesis_status?: SynthesisStatus;
+  review_status?: ReviewStatus;
+  reviewed_output_fingerprint?: string | null;
 
   // Standard Segment Flags (Section 5.3 & 5.7)
   is_locked?: boolean;
   is_skipped?: boolean;
   notes?: string;
-  review_status?: ReviewStatus;
   reported_issue?: SegmentIssue | null;
   versions?: AudioVersion[];
 
@@ -140,4 +149,14 @@ export interface QuotaMetrics {
   avg_latency_ms: number;
   total_requests: number;
   total_chars: number;
+}
+
+export interface TextChunk {
+  index: number;
+  position: number;
+  text: string;
+  word_count: number;
+  char_count: number;
+  estimated_duration_secs: number;
+  estimated_duration_ms: number;
 }

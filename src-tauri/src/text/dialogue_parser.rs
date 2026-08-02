@@ -29,7 +29,11 @@ impl DialogueParser {
 
             if let Some((speaker, content)) = Self::split_speaker_prefix(trimmed) {
                 let lower_spk = speaker.to_lowercase();
-                let role = if lower_spk.contains("a") || lower_spk.contains("người dẫn") || lower_spk.contains("mc") || lower_spk.contains("host") {
+                let role = if lower_spk.contains("a")
+                    || lower_spk.contains("người dẫn")
+                    || lower_spk.contains("mc")
+                    || lower_spk.contains("host")
+                {
                     SpeakerRole::SpeakerA
                 } else {
                     SpeakerRole::SpeakerB

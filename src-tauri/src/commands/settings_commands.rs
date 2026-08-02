@@ -1,8 +1,8 @@
-use std::sync::atomic::Ordering;
-use tauri::State;
-use serde::{Deserialize, Serialize};
 use crate::state::app_state::AppState;
 use crate::storage::db::QuotaMetrics;
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::Ordering;
+use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -10,9 +10,7 @@ pub struct AppSettings {
 }
 
 #[tauri::command]
-pub async fn get_app_settings(
-    state: State<'_, AppState>,
-) -> Result<AppSettings, String> {
+pub async fn get_app_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
     let concurrency = state.concurrency.load(Ordering::Relaxed);
     Ok(AppSettings { concurrency })
 }
@@ -23,7 +21,9 @@ pub async fn update_app_settings(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let valid_concurrency = concurrency.clamp(1, 5);
-    state.concurrency.store(valid_concurrency, Ordering::Relaxed);
+    state
+        .concurrency
+        .store(valid_concurrency, Ordering::Relaxed);
 
     if let Some(ref db) = state.db {
         let _ = db.set_setting("concurrency", &valid_concurrency.to_string());
@@ -32,9 +32,7 @@ pub async fn update_app_settings(
 }
 
 #[tauri::command]
-pub async fn get_quota_metrics(
-    state: State<'_, AppState>,
-) -> Result<QuotaMetrics, String> {
+pub async fn get_quota_metrics(state: State<'_, AppState>) -> Result<QuotaMetrics, String> {
     if let Some(ref db) = state.db {
         let mut metrics = db.get_quota_metrics().unwrap_or_default();
         // Combine in-memory counters for live updates

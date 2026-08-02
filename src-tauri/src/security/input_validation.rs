@@ -6,7 +6,10 @@ pub fn validate_project_name(name: &str) -> Result<(), String> {
     if trimmed.chars().count() > 255 {
         return Err("Tên dự án vượt quá giới hạn 255 ký tự".to_string());
     }
-    if trimmed.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+    if trimmed
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
         return Err("Tên dự án chứa ký tự không hợp lệ".to_string());
     }
     Ok(())

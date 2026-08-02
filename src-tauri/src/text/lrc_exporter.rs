@@ -33,8 +33,7 @@ impl LrcExporter {
         }
 
         let path_ref = output_path.as_ref();
-        fs::write(path_ref, content.as_bytes())
-            .map_err(|e| format!("Lỗi ghi file LRC: {}", e))?;
+        fs::write(path_ref, content.as_bytes()).map_err(|e| format!("Lỗi ghi file LRC: {}", e))?;
 
         info!("Exported LRC subtitles to {:?}", path_ref);
         Ok(path_ref.to_string_lossy().to_string())

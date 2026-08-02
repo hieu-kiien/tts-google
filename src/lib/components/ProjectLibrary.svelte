@@ -2,8 +2,7 @@
   import { projectState } from "../state/projectState.svelte";
   import { uiState } from "../state/uiState.svelte";
   import type { ProjectRecord } from "../types/tts";
-  import { createProject, deleteProject, getProjectSegments } from "../api/projectClient";
-  import { invoke } from "@tauri-apps/api/core";
+  import { createProject, deleteProject, deleteProjectsBatch, getProjectSegments } from "../api/projectClient";
   import { toastStore } from "../state/toasts.svelte";
   import { getErrorMessage } from "../utils/errorUtils";
 
@@ -56,6 +55,9 @@
   }
 
   async function selectProject(proj: ProjectRecord) {
+    if (projectState.hasPendingSaves) {
+      await projectState.flushPendingSaves();
+    }
     projectState.currentProject = proj;
     try {
       const segs = await getProjectSegments(proj.id);
@@ -113,7 +115,7 @@
       return;
     }
     try {
-      await invoke("delete_projects_batch", { projectIds: ids });
+      await deleteProjectsBatch(ids);
       projectState.projects = projectState.projects.filter(p => !selectedProjectIds.has(p.id));
       if (projectState.currentProject && selectedProjectIds.has(projectState.currentProject.id)) {
         projectState.currentProject = null;

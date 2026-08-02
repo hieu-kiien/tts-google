@@ -1,9 +1,8 @@
+use crate::audio::pcm_wav::{generate_silence_pcm, get_standard_wav_spec};
 use hound::{WavReader, WavWriter};
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 use tracing::info;
-use crate::audio::pcm_wav::{get_standard_wav_spec, generate_silence_pcm};
-
 
 /// Merges multiple 24kHz 16-bit Mono WAV segment files into a single destination master WAV file safely with atomic rename.
 pub fn merge_wav_files(
@@ -16,9 +15,7 @@ pub fn merge_wav_files(
     }
 
     let target_path = Path::new(output_path);
-    let parent_dir = target_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let parent_dir = target_path.parent().unwrap_or_else(|| Path::new("."));
 
     if !parent_dir.exists() {
         fs::create_dir_all(parent_dir)
@@ -26,16 +23,17 @@ pub fn merge_wav_files(
     }
 
     // Atomic temp file in SAME directory to ensure cross-device rename works on Windows
-    let temp_filename = format!(
-        ".tmp_master_{}.wav",
-        uuid::Uuid::new_v4().simple()
-    );
+    let temp_filename = format!(".tmp_master_{}.wav", uuid::Uuid::new_v4().simple());
     let temp_output_path = parent_dir.join(temp_filename);
     let temp_output_str = temp_output_path.to_str().ok_or("Invalid output path")?;
 
     let spec = get_standard_wav_spec();
-    let mut writer = WavWriter::create(temp_output_str, spec)
-        .map_err(|e| format!("Failed to create temp master WAV file at {}: {}", temp_output_str, e))?;
+    let mut writer = WavWriter::create(temp_output_str, spec).map_err(|e| {
+        format!(
+            "Failed to create temp master WAV file at {}: {}",
+            temp_output_str, e
+        )
+    })?;
 
     let silence_pcm = generate_silence_pcm(silence_gap_ms);
     let mut total_samples_written: u64 = 0;
@@ -46,31 +44,44 @@ pub fn merge_wav_files(
             return Err(format!("Segment file does not exist: {}", seg_path));
         }
 
-        let mut reader = WavReader::open(seg_path)
-            .map_err(|e| {
-                let _ = fs::remove_file(&temp_output_path);
-                format!("Failed to open segment WAV at {}: {}", seg_path, e)
-            })?;
+        let mut reader = WavReader::open(seg_path).map_err(|e| {
+            let _ = fs::remove_file(&temp_output_path);
+            format!("Failed to open segment WAV at {}: {}", seg_path, e)
+        })?;
 
         // Audio Spec Validation
         let r_spec = reader.spec();
-        if r_spec.sample_rate != spec.sample_rate || r_spec.channels != spec.channels || r_spec.bits_per_sample != spec.bits_per_sample {
+        if r_spec.sample_rate != spec.sample_rate
+            || r_spec.channels != spec.channels
+            || r_spec.bits_per_sample != spec.bits_per_sample
+        {
             let _ = fs::remove_file(&temp_output_path);
             return Err(format!(
                 "Incompatible WAV spec in {}: expected {}Hz/{}ch/{}bit, got {}Hz/{}ch/{}bit",
-                seg_path, spec.sample_rate, spec.channels, spec.bits_per_sample, r_spec.sample_rate, r_spec.channels, r_spec.bits_per_sample
+                seg_path,
+                spec.sample_rate,
+                spec.channels,
+                spec.bits_per_sample,
+                r_spec.sample_rate,
+                r_spec.channels,
+                r_spec.bits_per_sample
             ));
         }
 
         // Read and normalize samples for peak volume consistency
-        let raw_samples: Vec<i16> = reader.samples::<i16>()
+        let raw_samples: Vec<i16> = reader
+            .samples::<i16>()
             .collect::<Result<Vec<i16>, _>>()
             .map_err(|e| {
                 let _ = fs::remove_file(&temp_output_path);
                 format!("Corrupt sample in {}: {}", seg_path, e)
             })?;
 
-        let max_peak = raw_samples.iter().map(|s| s.saturating_abs() as u32).max().unwrap_or(0);
+        let max_peak = raw_samples
+            .iter()
+            .map(|s| s.saturating_abs() as u32)
+            .max()
+            .unwrap_or(0);
         let scale = if max_peak > 1000 && max_peak < 32000 {
             28000.0 / max_peak as f32
         } else {
@@ -104,17 +115,18 @@ pub fn merge_wav_files(
         }
     }
 
-    writer
-        .finalize()
-        .map_err(|e| {
-            let _ = fs::remove_file(&temp_output_path);
-            format!("Failed to finalize master WAV file: {}", e)
-        })?;
+    writer.finalize().map_err(|e| {
+        let _ = fs::remove_file(&temp_output_path);
+        format!("Failed to finalize master WAV file: {}", e)
+    })?;
 
     // Atomic rename to target output path
     if let Err(rename_err) = fs::rename(&temp_output_path, target_path) {
         // Fallback: copy + remove for Windows (file may be locked by antivirus)
-        info!("Atomic rename failed ({}), falling back to copy + remove.", rename_err);
+        info!(
+            "Atomic rename failed ({}), falling back to copy + remove.",
+            rename_err
+        );
         if let Err(copy_err) = fs::copy(&temp_output_path, target_path) {
             let _ = fs::remove_file(&temp_output_path);
             return Err(format!("Failed to copy master WAV: {}", copy_err));
@@ -136,15 +148,27 @@ pub fn merge_wav_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use crate::audio::pcm_wav::write_pcm_to_wav_file;
+    use std::fs;
 
     #[test]
     fn test_merge_wav_files_atomic() {
         let temp_dir = std::env::temp_dir();
-        let path1 = temp_dir.join("seg1_atomic.wav").to_str().unwrap().to_string();
-        let path2 = temp_dir.join("seg2_atomic.wav").to_str().unwrap().to_string();
-        let out_path = temp_dir.join("master_out_atomic.wav").to_str().unwrap().to_string();
+        let path1 = temp_dir
+            .join("seg1_atomic.wav")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let path2 = temp_dir
+            .join("seg2_atomic.wav")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let out_path = temp_dir
+            .join("master_out_atomic.wav")
+            .to_str()
+            .unwrap()
+            .to_string();
 
         let pcm1 = vec![0u8; 4800]; // 100ms 24kHz mono PCM
         let pcm2 = vec![0u8; 4800]; // 100ms 24kHz mono PCM

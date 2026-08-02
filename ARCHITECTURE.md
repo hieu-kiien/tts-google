@@ -86,3 +86,29 @@ flowchart TD
 4. **API Request**: Queue Worker fetches API key from `KeyringStore`, formats prompt via `PromptBuilder`, and makes HTTPS POST request to `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent`.
 5. **PCM Decoding & Cache**: Raw base64 audio is decoded, validated for duration, converted to WAV, and cached locally.
 6. **WAV Merging**: Upon project completion, `wav_merger` combines all segment WAV files into a single master WAV file.
+
+---
+
+## 4. Known Issues & Roadmap
+
+> [!NOTE]
+> Comprehensive code review (02/08/2026) identified **50 findings** across 8 review dimensions.
+> Full implementation plan with regression tests is tracked separately.
+
+### Critical Issues (Being Addressed)
+
+| # | Issue | Impact |
+|---|-------|--------|
+| C-1 | Audio playback via `asset://` protocol may return 403 | Audio không phát được |
+| C-2 | `insert_segment_at` hardcodes prompt value | Audio nói sai nội dung |
+| C-3 | "Retry" button only previews, doesn't save to DB | Export thiếu đoạn audio |
+| C-4 | No virtual list — 10K+ segments collapse DOM | App đơ với dữ liệu lớn |
+| C-5 | `get_segment_counts` uses `SELECT *` in loop | O(N²) database queries |
+
+### Architecture Decisions Pending
+
+- **SQLite concurrency**: Evaluate WAL mode + `spawn_blocking` before enabling multi-worker (M-1)
+- **EditorCentral decomposition**: 1139-line component needs extraction into SegmentList, SegmentItem, SearchReplace, BatchActions (H-6)
+- **Typed errors**: Replace `Result<T, String>` with structured `AppError` across IPC boundary (M-3)
+- **Status enum**: Replace magic strings with `#[serde(rename_all = "snake_case")]` Rust enum + TypeScript union type (M-4)
+

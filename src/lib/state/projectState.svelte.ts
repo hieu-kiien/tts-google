@@ -28,6 +28,13 @@ export const defaultStandardRules: PronunciationRule[] = [
   { id: "22", find: "App", replace: "Ứng dụng" },
 ];
 
+export type PendingSegmentSave = {
+  segmentId: string;
+  projectId: string;
+  text: string;
+  clientRevision: number;
+};
+
 class ProjectState {
   projects = $state<ProjectRecord[]>([]);
   currentProject = $state<ProjectRecord | null>(null);
@@ -37,18 +44,27 @@ class ProjectState {
   activeSegmentId = $state<string | null>(null);
 
   private _debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private _pendingSaveMap: Map<string, PendingSegmentSave> = new Map();
+  private _clientRevisions: Map<string, number> = new Map();
+  private _compiledRules: { regex: RegExp; replace: string }[] | null = null;
+  private _rulesHash: string = '';
 
   // Helper to compute spoken text with current dictionary rules
   computeSpokenText(originalText: string): string {
+    const currentHash = this.dictionaryRules.map(r => r.find + r.replace).join('|');
+    if (currentHash !== this._rulesHash) {
+      this._rulesHash = currentHash;
+      this._compiledRules = this.dictionaryRules
+        .filter(r => r.find.trim())
+        .map(r => ({
+          regex: new RegExp(r.find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'),
+          replace: r.replace,
+        }));
+    }
+
     let result = originalText;
-    for (const rule of this.dictionaryRules) {
-      if (rule.find.trim()) {
-        // Use escaped literal match instead of \b for Unicode compatibility
-        // Simple literal match - more reliable than Unicode lookbehind
-        const escaped = rule.find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(escaped, 'gi');
-        result = result.replace(regex, rule.replace);
-      }
+    for (const rule of this._compiledRules!) {
+      result = result.replace(rule.regex, rule.replace);
     }
     // Number and currency expansions - MUST process larger patterns first
     result = result.replace(/(\d+)\.000\.000\s*đ/gi, '$1 triệu đồng');
@@ -57,7 +73,7 @@ class ProjectState {
   }
 
   get hasPendingSaves(): boolean {
-    return this._debounceTimers.size > 0;
+    return this._pendingSaveMap.size > 0 || this._debounceTimers.size > 0;
   }
 
   get activeSegment(): SegmentRecord | null {
@@ -79,13 +95,21 @@ class ProjectState {
     }
   }
 
-  setSegmentReviewStatus(segmentId: string, status: ReviewStatus, issue: SegmentIssue | null = null) {
+  async setSegmentReviewStatus(segmentId: string, status: ReviewStatus, issue: SegmentIssue | null = null) {
     const seg = this.segments.find(s => s.id === segmentId);
     if (seg) {
       seg.review_status = status;
       seg.reported_issue = issue;
-      if (status === "approved") {
-        seg.status = "approved";
+      seg.reviewed_output_fingerprint = status === "approved" ? (seg.output_fingerprint || null) : null;
+      
+      try {
+        await invoke("update_segment_review_status", {
+          segmentId: seg.id,
+          reviewStatus: status,
+          reviewedOutputFingerprint: seg.reviewed_output_fingerprint,
+        });
+      } catch (err: unknown) {
+        console.warn("Lỗi update_segment_review_status IPC:", getErrorMessage(err));
       }
     }
   }
@@ -105,33 +129,53 @@ class ProjectState {
     seg.text = newText;
 
     // Debounce computeSpokenText: only recompute after 300ms of no typing
-    const existingTimer = this._debounceTimers.get(segmentId);
-    if (existingTimer) clearTimeout(existingTimer);
+    const spokenTimerKey = `spoken_${segmentId}`;
+    const existingSpokenTimer = this._debounceTimers.get(spokenTimerKey);
+    if (existingSpokenTimer) clearTimeout(existingSpokenTimer);
 
-    this._debounceTimers.set(segmentId, setTimeout(() => {
+    this._debounceTimers.set(spokenTimerKey, setTimeout(() => {
       seg.spoken_text = this.computeSpokenText(newText);
-      this._debounceTimers.delete(segmentId);
+      this._debounceTimers.delete(spokenTimerKey);
     }, 300));
 
-    // Debounce IPC call to backend too
     if (this.currentProject?.id) {
-      const projectId = this.currentProject.id; // Capture NOW to avoid race
+      const projectId = this.currentProject.id;
+      const revision = (this._clientRevisions.get(segmentId) || 0) + 1;
+      this._clientRevisions.set(segmentId, revision);
+
+      this._pendingSaveMap.set(segmentId, {
+        segmentId,
+        projectId,
+        text: newText,
+        clientRevision: revision,
+      });
+
       const ipcTimerKey = `ipc_${segmentId}`;
       const existingIpcTimer = this._debounceTimers.get(ipcTimerKey);
       if (existingIpcTimer) clearTimeout(existingIpcTimer);
 
       this._debounceTimers.set(ipcTimerKey, setTimeout(async () => {
-        try {
-          await invoke("update_segment_text", {
-            projectId: projectId, // Use captured value
-            segmentId: seg.id,
-            text: newText
-          });
-        } catch (err: unknown) {
-          console.warn("Lỗi update_segment_text IPC:", getErrorMessage(err));
-        }
         this._debounceTimers.delete(ipcTimerKey);
+        await this.saveSingleSegment(segmentId, projectId, newText, revision);
       }, 500));
+    }
+  }
+
+  private async saveSingleSegment(segmentId: string, projectId: string, text: string, revision: number): Promise<boolean> {
+    try {
+      await invoke("update_segment_text", {
+        projectId,
+        segmentId,
+        text,
+      });
+      const pending = this._pendingSaveMap.get(segmentId);
+      if (pending && pending.clientRevision === revision) {
+        this._pendingSaveMap.delete(segmentId);
+      }
+      return true;
+    } catch (err: unknown) {
+      console.warn(`Lỗi lưu DB cho segment ${segmentId}:`, getErrorMessage(err));
+      return false;
     }
   }
 
@@ -175,11 +219,52 @@ class ProjectState {
     return occurrencesCount;
   }
 
-  flushPendingSaves() {
-    for (const [key, timer] of this._debounceTimers.entries()) {
+  async flushPendingSaves(): Promise<boolean> {
+    // === ATOMIC SWAP ===
+    // Snapshot the current pending state, then replace with fresh maps.
+    // Any edits arriving AFTER this point go into the new maps and won't be lost.
+    const timersSnapshot = this._debounceTimers;
+    const pendingSnapshot = this._pendingSaveMap;
+    this._debounceTimers = new Map();
+    this._pendingSaveMap = new Map();
+
+    // Cancel all timers from the snapshot
+    for (const timer of timersSnapshot.values()) {
       clearTimeout(timer);
     }
-    this._debounceTimers.clear();
+
+    if (pendingSnapshot.size === 0) {
+      return true;
+    }
+
+    // Flush snapshot — use allSettled so one failure doesn't block others
+    const pendingEntries = Array.from(pendingSnapshot.values());
+    const results = await Promise.allSettled(
+      pendingEntries.map(entry =>
+        invoke("update_segment_text", {
+          projectId: entry.projectId,
+          segmentId: entry.segmentId,
+          text: entry.text,
+        })
+      )
+    );
+
+    // Re-queue failed saves ONLY if no newer edit exists in the current map
+    let allSucceeded = true;
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === "rejected") {
+        allSucceeded = false;
+        const entry = pendingEntries[i];
+        if (!this._pendingSaveMap.has(entry.segmentId)) {
+          // No newer edit → re-queue for retry
+          this._pendingSaveMap.set(entry.segmentId, entry);
+          console.warn(`Failed to save segment ${entry.segmentId}, will retry`);
+        }
+        // If newer edit exists → skip (the new edit's debounce will handle it)
+      }
+    }
+
+    return allSucceeded && this._pendingSaveMap.size === 0;
   }
 
   addDictionaryRule(find: string, replace: string) {
@@ -189,10 +274,12 @@ class ProjectState {
       replace: replace.trim()
     };
     this.dictionaryRules = [...this.dictionaryRules, newRule];
+    this._rulesHash = '';
   }
 
   loadDefaultRules() {
     this.dictionaryRules = [...defaultStandardRules];
+    this._rulesHash = '';
   }
 }
 

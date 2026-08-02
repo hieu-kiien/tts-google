@@ -10,7 +10,8 @@ impl DocumentParser {
             return Err(format!("File không tồn tại tại đường dẫn: {:?}", path));
         }
 
-        let ext = path.extension()
+        let ext = path
+            .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_lowercase();

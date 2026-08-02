@@ -46,7 +46,6 @@ pub fn build_tts_prompt(text: &str, opts: &PromptStyleOptions) -> String {
     builder.build_prompt(text)
 }
 
-
 /// Prompt formatting style for isolating Director Notes from Transcript.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PromptStyle {
@@ -128,7 +127,11 @@ impl PromptBuilder {
     }
 
     /// Builds a TTS prompt for a specific chunk, including chunk index metadata if provided.
-    pub fn build_chunk_prompt(&self, transcript: &str, chunk_info: Option<(usize, usize)>) -> String {
+    pub fn build_chunk_prompt(
+        &self,
+        transcript: &str,
+        chunk_info: Option<(usize, usize)>,
+    ) -> String {
         let clean_transcript = transcript.trim();
 
         match self.style {
@@ -254,38 +257,37 @@ impl PromptBuilder {
     }
 }
 
+use std::sync::LazyLock;
+
+static RE_SPEAK: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)</?speak>").unwrap());
+static RE_BREAK: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r#"(?i)<break\s+time=["']([^"']+)["']\s*/?>"#).unwrap());
+static RE_EMP: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)<emphasis[^>]*>(.*?)</emphasis>").unwrap());
+static RE_PROSODY: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r#"(?i)<prosody\s+([^>]+)>(.*?)</prosody>"#).unwrap());
+
 /// Parse SSML markup into Director Notes and clean Transcript text for Gemini TTS.
 pub fn parse_ssml_to_prompt(ssml_text: &str) -> (DirectorNotes, String) {
     let mut notes = DirectorNotes::default();
     let mut clean_text = ssml_text.to_string();
 
     // Strip <speak> outer wrapper
-    if let Ok(re_speak) = regex::Regex::new(r"(?i)</?speak>") {
-        clean_text = re_speak.replace_all(&clean_text, "").to_string();
-    }
+    clean_text = RE_SPEAK.replace_all(&clean_text, "").to_string();
 
     // Process <break time="..."/> -> [Pause ...]
-    if let Ok(re_break) = regex::Regex::new(r#"(?i)<break\s+time=["']([^"']+)["']\s*/?>"#) {
-        clean_text = re_break.replace_all(&clean_text, " [Pause $1] ").to_string();
-    }
+    clean_text = RE_BREAK.replace_all(&clean_text, " [Pause $1] ").to_string();
 
     // Process <emphasis level="...">text</emphasis> -> [Emphasize: text]
-    if let Ok(re_emp) = regex::Regex::new(r"(?i)<emphasis[^>]*>(.*?)</emphasis>") {
-        clean_text = re_emp.replace_all(&clean_text, " [Emphasize: $1] ").to_string();
-    }
+    clean_text = RE_EMP.replace_all(&clean_text, " [Emphasize: $1] ").to_string();
 
     // Process <prosody rate="..." pitch="...">text</prosody>
-    if let Ok(re_prosody) = regex::Regex::new(r#"(?i)<prosody\s+([^>]+)>(.*?)</prosody>"#) {
-        for cap in re_prosody.captures_iter(ssml_text) {
-            let attrs = &cap[1];
-            if attrs.contains("slow") {
-                notes.speed = Some("slow".to_string());
-            } else if attrs.contains("fast") {
-                notes.speed = Some("fast".to_string());
-            }
+    for cap in RE_PROSODY.captures_iter(ssml_text) {
+        let attrs = &cap[1];
+        if attrs.contains("slow") {
+            notes.speed = Some("slow".to_string());
+        } else if attrs.contains("fast") {
+            notes.speed = Some("fast".to_string());
         }
-        clean_text = re_prosody.replace_all(&clean_text, "$2").to_string();
     }
+    clean_text = RE_PROSODY.replace_all(&clean_text, "$2").to_string();
 
     // Trim whitespace
     clean_text = clean_text.trim().to_string();
@@ -305,7 +307,6 @@ mod tests {
         assert!(transcript.contains("[Emphasize: tiếng Việt]"));
         assert!(!transcript.contains("<speak>"));
     }
-
 
     #[test]
     fn test_prompt_builder_tagged_style() {
@@ -391,4 +392,3 @@ mod tests {
         assert!(prompt.contains("Nội dung đơn giản."));
     }
 }
-

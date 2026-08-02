@@ -14,11 +14,15 @@ fn find_target_dir(out_dir: &Path) -> Option<PathBuf> {
 }
 
 fn add_winlibs_to_path() {
-    let winlibs = r"C:\Users\hieuk\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT.LLVM_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin";
-    if Path::new(winlibs).exists() {
-        if let Ok(curr_path) = env::var("PATH") {
-            let new_path = format!("{};{}", winlibs, curr_path);
-            env::set_var("PATH", new_path);
+    if let Ok(winlibs) = std::env::var("WINLIBS_PATH") {
+        let p = std::path::Path::new(&winlibs);
+        if p.exists() {
+            if let Ok(curr_path) = env::var("PATH") {
+                let new_path = format!("{};{}", winlibs, curr_path);
+                env::set_var("PATH", new_path);
+            }
+        } else {
+            println!("cargo:warning=WINLIBS_PATH set but directory does not exist: {}", winlibs);
         }
     }
 }
@@ -48,7 +52,10 @@ fn create_side_by_side_manifests() {
             let dest_dir = target_dir.join(&profile);
             let deps_dir = dest_dir.join("deps");
 
-            let _ = fs::write(dest_dir.join("auto-tts-desktop.exe.manifest"), manifest_content);
+            let _ = fs::write(
+                dest_dir.join("auto-tts-desktop.exe.manifest"),
+                manifest_content,
+            );
 
             if let Ok(entries) = fs::read_dir(&deps_dir) {
                 for entry in entries.flatten() {

@@ -1,12 +1,12 @@
-use tauri::State;
-use serde::{Serialize, Deserialize};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use crate::state::app_state::AppState;
-use crate::audio::pcm_wav::pcm_to_wav_bytes;
 use crate::api::interactions_client::DEFAULT_MODEL;
-use crate::security::input_validation::validate_api_key;
+use crate::audio::pcm_wav::pcm_to_wav_bytes;
 use crate::models::registry::validate_tts_model;
+use crate::security::input_validation::validate_api_key;
+use crate::state::app_state::AppState;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
+use serde::{Deserialize, Serialize};
+use tauri::State;
 
 #[derive(Serialize, Deserialize)]
 pub struct KeyStatus {
@@ -123,7 +123,12 @@ pub async fn test_api_connection(
         .header("x-goog-api-key", key.trim())
         .send()
         .await
-        .map_err(|e| format!("Không thể kết nối máy chủ Google API (Kiểm tra kết nối mạng): {}", e))?;
+        .map_err(|e| {
+            format!(
+                "Không thể kết nối máy chủ Google API (Kiểm tra kết nối mạng): {}",
+                e
+            )
+        })?;
 
     let status = response.status();
     if status.is_success() {
@@ -131,11 +136,18 @@ pub async fn test_api_connection(
     } else if status.as_u16() == 400 || status.as_u16() == 401 || status.as_u16() == 403 {
         Err("❌ API Key không hợp lệ hoặc đã bị vô hiệu hóa (HTTP 400/401/403)".to_string())
     } else if status.as_u16() == 429 {
-        Err("⚠️ Quá giới hạn lượt gọi API (Rate Limited - 429). Vui lòng thử lại sau vài giây.".to_string())
+        Err(
+            "⚠️ Quá giới hạn lượt gọi API (Rate Limited - 429). Vui lòng thử lại sau vài giây."
+                .to_string(),
+        )
     } else {
         let err_body = response.text().await.unwrap_or_default();
         let safe_err = err_body.replace(key.trim(), "***REDACTED***");
-        Err(format!("Lỗi Google API (HTTP {}): {}", status.as_u16(), safe_err))
+        Err(format!(
+            "Lỗi Google API (HTTP {}): {}",
+            status.as_u16(),
+            safe_err
+        ))
     }
 }
 
@@ -148,10 +160,9 @@ pub async fn synthesize_preview_audio(
     pitch: Option<f32>,
     state: State<'_, AppState>,
 ) -> Result<AudioPreviewResult, String> {
-    let key = state
-        .credentials
-        .get_key()
-        .ok_or_else(|| "Chưa cấu hình Gemini API Key. Vui lòng bấm 'Cấu Hình API Key' để dán key.".to_string())?;
+    let key = state.credentials.get_key().ok_or_else(|| {
+        "Chưa cấu hình Gemini API Key. Vui lòng bấm 'Cấu Hình API Key' để dán key.".to_string()
+    })?;
 
     let selected_model = match model {
         Some(m) if !m.trim().is_empty() => {
@@ -177,13 +188,11 @@ pub async fn synthesize_preview_audio(
         .await
     {
         Ok(bytes) => bytes,
-        Err(_e) => {
-            state
-                .gemini_client
-                .synthesize_speech(&key, DEFAULT_MODEL, &formatted_text, &voice)
-                .await
-                .map_err(|err| format!("Lỗi tổng hợp audio từ Gemini API: {}", err))?
-        }
+        Err(_e) => state
+            .gemini_client
+            .synthesize_speech(&key, DEFAULT_MODEL, &formatted_text, &voice)
+            .await
+            .map_err(|err| format!("Lỗi tổng hợp audio từ Gemini API: {}", err))?,
     };
 
     let wav_bytes = pcm_to_wav_bytes(&pcm_bytes)?;

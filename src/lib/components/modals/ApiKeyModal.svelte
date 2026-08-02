@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { getApiKeysInfo, saveApiKeys, removeApiKeyAt, type ApiKeysInfo } from "../../api/settingsClient";
 
   let {
     show = false,
@@ -33,7 +33,7 @@
 
   async function loadKeysInfo() {
     try {
-      const info = await invoke<{ count: number; keys_masked: string[]; configured: boolean }>("get_api_keys_info");
+      const info = await getApiKeysInfo();
       savedKeysMasked = info.keys_masked;
       keyCount = info.count;
     } catch {
@@ -68,10 +68,7 @@
 
     // Multi-key — use new API
     try {
-      const result = await invoke<{ count: number; keys_masked: string[]; configured: boolean }>(
-        "save_api_keys",
-        { keys: allKeys, remember: rememberKey }
-      );
+      const result = await saveApiKeys(allKeys, rememberKey);
       savedKeysMasked = result.keys_masked;
       keyCount = result.count;
     } catch {
@@ -82,10 +79,7 @@
 
   async function removeKeyAt(index: number) {
     try {
-      const result = await invoke<{ count: number; keys_masked: string[]; configured: boolean }>(
-        "remove_api_key_at",
-        { index }
-      );
+      const result = await removeApiKeyAt(index);
       savedKeysMasked = result.keys_masked;
       keyCount = result.count;
     } catch {

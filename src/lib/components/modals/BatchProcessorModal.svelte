@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { createProject, getProjectSegments } from "../../api/projectClient";
+  import { mergeProjectAudio } from "../../api/audioClient";
+  import { readTextFileDialog, readTextFileContent } from "../../api/dialogClient";
   import { uiState } from "../../state/uiState.svelte";
   import { toastStore } from "../../state/toasts.svelte";
   import { projectState } from "../../state/projectState.svelte";
@@ -36,9 +38,7 @@
 
   async function handleSelectBatchFiles() {
     try {
-      const selected = await invoke<string[] | string | null>("read_text_file_dialog", {
-        multiple: true
-      });
+      const selected = await readTextFileDialog(true);
 
       if (!selected) return;
 
@@ -49,7 +49,7 @@
         
         // Read file content
         try {
-          const content = await invoke<string>("read_text_file_content", { path: pathStr });
+          const content = await readTextFileContent(pathStr);
           batchFiles.push({
             id: `batch_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             fileName: name,
@@ -107,30 +107,25 @@
       try {
         // 1. Create temporary project for this file
         const projName = `[Batch] ${item.fileName}`;
-        const createdProj = await invoke<{ id: string }>("create_project", {
+        const createdProj = await createProject({
           name: projName,
           sourceText: item.text,
           voice: selectedVoice,
+          preset: "Tự nhiên",
           model: selectedModel
         });
 
         item.progressPct = 40;
 
         // 2. Synthesize audio preview/chunks
-        const segs = await invoke<Array<{ id: string; audio_path?: string }>>("get_project_segments", {
-          projectId: createdProj.id
-        });
+        const segs = await getProjectSegments(createdProj.id);
 
         item.progressPct = 70;
 
         // 3. Merge project audio
         try {
-          const mergedRes = await invoke<{ file_path: string }>("merge_project_audio", {
-            projectId: createdProj.id,
-            silenceMs: 300,
-            normalizeVolume: true
-          });
-          item.outputPath = mergedRes.file_path;
+          const mergedRes = await mergeProjectAudio(createdProj.id, 300);
+          item.outputPath = mergedRes.output_path;
         } catch {
           // Ignore merge if single segment
         }

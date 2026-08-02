@@ -2,7 +2,8 @@
   import type { QueueSnapshot, SegmentRecord } from "../types/tts";
   import { projectState } from "../state/projectState.svelte";
   import { playerState } from "../state/playerState.svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { readAudioDataUrl } from "../api/audioClient";
+  import { toastStore } from "../state/toasts.svelte";
   import { getErrorMessage } from "../utils/errorUtils";
 
   let {
@@ -24,10 +25,10 @@
   async function handlePlaySegment(seg: SegmentRecord) {
     if (seg.audio_path) {
       try {
-        const dataUrl = await invoke<string>("read_audio_data_url", { filePath: seg.audio_path });
+        const dataUrl = await readAudioDataUrl(undefined, seg.audio_path);
         playerState.playUrl(dataUrl, seg.id);
       } catch (err: unknown) {
-        console.warn("Lỗi đọc file audio segment:", getErrorMessage(err));
+        toastStore.showError("Không thể đọc tệp audio: " + getErrorMessage(err));
       }
     }
   }

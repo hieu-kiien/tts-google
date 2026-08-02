@@ -218,7 +218,6 @@ pub fn chunk_vietnamese_text_by_mode(text: &str, mode: &str) -> Vec<TextChunk> {
     }
 }
 
-
 /// Hierarchical Vietnamese text chunker.
 /// Hierarchy strategy: Heading -> Paragraph -> Sentence -> Clause -> Word
 #[derive(Debug, Clone)]
@@ -281,19 +280,36 @@ impl VietnameseChunker {
                 current_char_count = potential_len;
 
                 // Optional soft threshold: if we reached target_chars and unit was paragraph boundary
-                if current_char_count >= target_chars && (unit.ends_with("\n\n") || unit.ends_with("\n")) {
-                    Self::finalize_chunk(&mut chunks, &mut current_buf, &mut current_char_count, &self.config);
+                if current_char_count >= target_chars
+                    && (unit.ends_with("\n\n") || unit.ends_with("\n"))
+                {
+                    Self::finalize_chunk(
+                        &mut chunks,
+                        &mut current_buf,
+                        &mut current_char_count,
+                        &self.config,
+                    );
                 }
             } else {
                 // Exceeds max_chars, finalize current chunk and start new one
-                Self::finalize_chunk(&mut chunks, &mut current_buf, &mut current_char_count, &self.config);
+                Self::finalize_chunk(
+                    &mut chunks,
+                    &mut current_buf,
+                    &mut current_char_count,
+                    &self.config,
+                );
                 current_buf.push_str(&unit);
                 current_char_count = unit_char_count;
             }
         }
 
         if !current_buf.is_empty() {
-            Self::finalize_chunk(&mut chunks, &mut current_buf, &mut current_char_count, &self.config);
+            Self::finalize_chunk(
+                &mut chunks,
+                &mut current_buf,
+                &mut current_char_count,
+                &self.config,
+            );
         }
 
         // Renumber index strictly
@@ -327,7 +343,6 @@ impl VietnameseChunker {
                 estimated_duration_secs: (est_dur * 10.0).round() / 10.0,
                 estimated_duration_ms: est_ms,
             });
-
         }
         buf.clear();
         *char_count = 0;
@@ -440,103 +455,111 @@ impl VietnameseChunker {
     /// Level 2: Split paragraph into sentences preserving punctuation (. ! ? ... … \n)
     fn split_sentences(&self, text: &str) -> Vec<String> {
         let mut sentences = Vec::new();
-        let chars: Vec<char> = text.chars().collect();
-        let len = chars.len();
+        let mut start_byte = 0;
+        let mut iter = text.char_indices().peekable();
 
-        let mut start = 0;
-        let mut i = 0;
-
-        while i < len {
-            let ch = chars[i];
-
+        while let Some((i, ch)) = iter.next() {
             if is_sentence_ending(ch) {
-                // Handle multi-dot ellipses "..." or "…"
-                let mut end = i + 1;
-                while end < len && is_sentence_ending(chars[end]) {
-                    end += 1;
+                let mut end_byte = i + ch.len_utf8();
+                
+                while let Some(&(next_i, next_ch)) = iter.peek() {
+                    if is_sentence_ending(next_ch) {
+                        end_byte = next_i + next_ch.len_utf8();
+                        iter.next();
+                    } else {
+                        break;
+                    }
                 }
 
-                // Check if this period is part of a Vietnamese abbreviation or number
-                let _snippet: String = chars[start..end].iter().collect();
-                if self.is_abbreviation_or_number(text, start, end) {
-
-                    i = end;
+                if self.is_abbreviation_or_number(text, start_byte, end_byte) {
                     continue;
                 }
 
-                // Include trailing closing quotes or brackets if present
-                while end < len && (chars[end] == '"' || chars[end] == '”' || chars[end] == ')' || chars[end] == ']') {
-                    end += 1;
+                while let Some(&(next_i, next_ch)) = iter.peek() {
+                    if next_ch == '"' || next_ch == '”' || next_ch == ')' || next_ch == ']' {
+                        end_byte = next_i + next_ch.len_utf8();
+                        iter.next();
+                    } else {
+                        break;
+                    }
                 }
 
-                // Include trailing whitespace or newline attached to sentence
-                while end < len && (chars[end] == ' ' || chars[end] == '\t') {
-                    end += 1;
+                while let Some(&(next_i, next_ch)) = iter.peek() {
+                    if next_ch == ' ' || next_ch == '\t' {
+                        end_byte = next_i + next_ch.len_utf8();
+                        iter.next();
+                    } else {
+                        break;
+                    }
                 }
 
-                let sentence: String = chars[start..end].iter().collect();
+                let sentence = &text[start_byte..end_byte];
                 if !sentence.is_empty() {
-                    sentences.push(sentence);
+                    sentences.push(sentence.to_string());
                 }
-                start = end;
-                i = end;
-            } else {
-                i += 1;
+                start_byte = end_byte;
             }
         }
 
-        if start < len {
-            let remaining: String = chars[start..len].iter().collect();
+        if start_byte < text.len() {
+            let remaining = &text[start_byte..];
             if !remaining.is_empty() {
-                sentences.push(remaining);
+                sentences.push(remaining.to_string());
             }
         }
 
         sentences
     }
 
-    fn is_abbreviation_or_number(&self, full_text: &str, start_idx: usize, end_idx: usize) -> bool {
-        let chars: Vec<char> = full_text.chars().collect();
-        let dot_pos = end_idx - 1;
+    fn is_abbreviation_or_number(&self, full_text: &str, start_byte: usize, end_byte: usize) -> bool {
+        let dot_char_opt = full_text[..end_byte].chars().next_back();
+        if dot_char_opt.is_none() {
+            return false;
+        }
+        let dot_char = dot_char_opt.unwrap();
+        let dot_pos = end_byte - dot_char.len_utf8();
 
-        if dot_pos == 0 || dot_pos + 1 >= chars.len() {
+        if dot_pos == 0 || dot_pos >= full_text.len() {
             return false;
         }
 
-        let char_before = chars[dot_pos - 1];
-        let char_after = chars[dot_pos + 1];
+        let char_before = full_text[..dot_pos].chars().next_back();
+        let char_after = full_text[end_byte..].chars().next();
 
-        // Decimal numbers like 1.5, 3.14
-        if char_before.is_ascii_digit() && char_after.is_ascii_digit() {
-            return true;
-        }
-
-        let start_bounded = start_idx.min(end_idx);
-        let sub_text: String = chars[start_bounded..end_idx].iter().collect();
-
-        // Domain names, URLs, emails, filenames without space after dot (e.g. example.com, v1.0, user.name@domain.com)
-        if !char_before.is_whitespace() && !char_after.is_whitespace() {
-            // Check if part of URL scheme, domain extension, or email
-            let lower = sub_text.to_lowercase();
-            if lower.contains("http://") || lower.contains("https://") || lower.contains("www.") || lower.contains("@") {
+        if let (Some(cb), Some(ca)) = (char_before, char_after) {
+            // Decimal numbers like 1.5, 3.14
+            if cb.is_ascii_digit() && ca.is_ascii_digit() {
                 return true;
             }
-            // If character after dot is a lowercase alphanumeric, it's a domain/filename extension (e.g. .com, .vn, .txt)
-            if char_after.is_ascii_lowercase() || char_after.is_ascii_digit() {
-                return true;
+
+            let start_bounded = start_byte.min(end_byte);
+            let sub_text = &full_text[start_bounded..end_byte];
+
+            // Domain names, URLs, emails, filenames without space after dot (e.g. example.com, v1.0, user.name@domain.com)
+            if !cb.is_whitespace() && !ca.is_whitespace() {
+                let lower = sub_text.to_lowercase();
+                if lower.contains("http://")
+                    || lower.contains("https://")
+                    || lower.contains("www.")
+                    || lower.contains("@")
+                {
+                    return true;
+                }
+                if ca.is_ascii_lowercase() || ca.is_ascii_digit() {
+                    return true;
+                }
             }
-        }
 
-        // Vietnamese common abbreviations
-        let abbrevs = [
-            "TP.", "Tp.", "ThS.", "TS.", "GS.", "PGS.", "BS.", "v.v.",
-            "e.g.", "i.e.", "St.", "Mr.", "Mrs.", "Dr.", "NXB.", "P.",
-            "Q.", "Th.S", "STT.", "SĐT.", "Co.", "Ltd.", "Inc.", "Corp.",
-        ];
+            let abbrevs = [
+                "TP.", "Tp.", "ThS.", "TS.", "GS.", "PGS.", "BS.", "v.v.", "e.g.", "i.e.", "St.",
+                "Mr.", "Mrs.", "Dr.", "NXB.", "P.", "Q.", "Th.S", "STT.", "SĐT.", "Co.", "Ltd.",
+                "Inc.", "Corp.",
+            ];
 
-        for abbrev in &abbrevs {
-            if sub_text.ends_with(abbrev) {
-                return true;
+            for abbrev in &abbrevs {
+                if sub_text.ends_with(abbrev) {
+                    return true;
+                }
             }
         }
 
@@ -546,44 +569,44 @@ impl VietnameseChunker {
     /// Level 3: Split sentence into clauses by punctuation (, ; : — – -)
     fn split_clauses(&self, text: &str) -> Vec<String> {
         let mut clauses = Vec::new();
-        let chars: Vec<char> = text.chars().collect();
-        let len = chars.len();
+        let mut start_byte = 0;
+        let mut iter = text.char_indices().peekable();
 
-        let mut start = 0;
-        let mut i = 0;
-
-        while i < len {
-            let ch = chars[i];
-
+        while let Some((i, ch)) = iter.next() {
             if is_clause_boundary(ch) {
                 // Do not treat colon in URL scheme (e.g. http://, https://) as clause boundary
-                if ch == ':' && i + 2 < len && chars[i + 1] == '/' && chars[i + 2] == '/' {
-                    i += 1;
-                    continue;
+                if ch == ':' {
+                    let mut clone_iter = iter.clone();
+                    if let Some((_, '/')) = clone_iter.next() {
+                        if let Some((_, '/')) = clone_iter.next() {
+                            continue;
+                        }
+                    }
                 }
 
-                let mut end = i + 1;
+                let mut end_byte = i + ch.len_utf8();
 
-                // Include trailing spaces
-                while end < len && (chars[end] == ' ' || chars[end] == '\t') {
-                    end += 1;
+                while let Some(&(next_i, next_ch)) = iter.peek() {
+                    if next_ch == ' ' || next_ch == '\t' {
+                        end_byte = next_i + next_ch.len_utf8();
+                        iter.next();
+                    } else {
+                        break;
+                    }
                 }
 
-                let clause: String = chars[start..end].iter().collect();
+                let clause = &text[start_byte..end_byte];
                 if !clause.is_empty() {
-                    clauses.push(clause);
+                    clauses.push(clause.to_string());
                 }
-                start = end;
-                i = end;
-            } else {
-                i += 1;
+                start_byte = end_byte;
             }
         }
 
-        if start < len {
-            let remaining: String = chars[start..len].iter().collect();
+        if start_byte < text.len() {
+            let remaining = &text[start_byte..];
             if !remaining.is_empty() {
-                clauses.push(remaining);
+                clauses.push(remaining.to_string());
             }
         }
 
@@ -675,7 +698,11 @@ mod tests {
             assert!(chunk.char_count <= 55); // fits within target boundary
         }
         // Verify all words and punctuation are preserved
-        let joined = chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join("\n\n");
+        let joined = chunks
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
         assert!(joined.contains("Tiêu đề bài viết"));
         assert!(joined.contains("Đoạn văn thứ nhất"));
         assert!(joined.contains("Đoạn văn thứ hai"));
@@ -691,7 +718,11 @@ mod tests {
 
         assert!(chunks.len() >= 2);
         // Ensure "GS." and "TP." and "v.v." were not incorrectly split as sentence ends
-        let full_reconstructed = chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ");
+        let full_reconstructed = chunks
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(full_reconstructed.contains("GS. Nguyễn Văn A"));
         assert!(full_reconstructed.contains("TP. Hồ Chí Minh"));
         assert!(full_reconstructed.contains("v.v."));
@@ -707,7 +738,11 @@ mod tests {
 
         assert!(chunks.len() >= 2);
         // Check that clauses preserve punctuation
-        let full_text = chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ");
+        let full_text = chunks
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(full_text.contains(","));
         assert!(full_text.contains(";"));
         assert!(full_text.contains("."));
@@ -741,7 +776,11 @@ mod tests {
         let text = "Vui lòng truy cập https://google.com hoặc gửi email tới contact@admin.vn trước 15.50 giờ. Phiên bản v1.2.0!";
         let chunks = chunker.chunk_text(text);
 
-        let full_output = chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ");
+        let full_output = chunks
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(full_output.contains("https://google.com"));
         assert!(full_output.contains("contact@admin.vn"));
         assert!(full_output.contains("15.50"));
@@ -757,7 +796,11 @@ mod tests {
         let chunks = chunker.chunk_text(text);
 
         assert!(!chunks.is_empty());
-        let full_output = chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ");
+        let full_output = chunks
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(full_output.contains("Chương 1: Hành Trình Mới"));
         assert!(full_output.contains("bắt đầu..."));
         assert!(full_output.contains("nói..."));
@@ -777,4 +820,3 @@ mod tests {
         assert!(sentences[2].contains("Đây là câu thứ ba"));
     }
 }
-

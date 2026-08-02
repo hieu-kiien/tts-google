@@ -1,10 +1,14 @@
-use serde::{Deserialize, Serialize};
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 pub const DEFAULT_MODEL: &str = "gemini-3.1-flash-tts-preview";
 pub const FALLBACK_MODEL: &str = "gemini-2.5-flash-preview-tts";
+
+const MAX_TIMEOUT_SECS: u64 = 300;
+const MIN_AUDIO_BYTES: usize = 1000;
+const SECONDS_PER_MINUTE: f64 = 60.0;
 
 // Official Google Gemini API Endpoint Template
 // POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
@@ -121,14 +125,33 @@ pub enum ApiError {
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApiError::MissingAudio => write!(f, "Google Gemini API response did not contain audio payload"),
-            ApiError::TruncatedAudio { expected_ms, actual_ms } => write!(f, "Audio appears truncated: expected ~{}ms, got {}ms", expected_ms, actual_ms),
+            ApiError::MissingAudio => write!(
+                f,
+                "Google Gemini API response did not contain audio payload"
+            ),
+            ApiError::TruncatedAudio {
+                expected_ms,
+                actual_ms,
+            } => write!(
+                f,
+                "Audio appears truncated: expected ~{}ms, got {}ms",
+                expected_ms, actual_ms
+            ),
             ApiError::CorruptAudio(msg) => write!(f, "Audio data is corrupt or invalid: {}", msg),
-            ApiError::Base64DecodeError(msg) => write!(f, "Failed to decode base64 audio payload: {}", msg),
+            ApiError::Base64DecodeError(msg) => {
+                write!(f, "Failed to decode base64 audio payload: {}", msg)
+            }
             ApiError::NetworkError(msg) => write!(f, "Network connectivity error: {}", msg),
-            ApiError::ApiServerError(code, msg) => write!(f, "Gemini API error ({}) : {}", code, msg),
-            ApiError::RateLimited(retry_after) => write!(f, "Rate limited (429 - Retry after {:?}s)", retry_after),
-            ApiError::RateLimitedDaily => write!(f, "Daily API quota exhausted (RPD limit). Resets at midnight Pacific Time."),
+            ApiError::ApiServerError(code, msg) => {
+                write!(f, "Gemini API error ({}) : {}", code, msg)
+            }
+            ApiError::RateLimited(retry_after) => {
+                write!(f, "Rate limited (429 - Retry after {:?}s)", retry_after)
+            }
+            ApiError::RateLimitedDaily => write!(
+                f,
+                "Daily API quota exhausted (RPD limit). Resets at midnight Pacific Time."
+            ),
             ApiError::Unauthorized => write!(f, "Invalid, missing or unauthorized Gemini API Key"),
             ApiError::EmptyResponse => write!(f, "API returned empty text response"),
         }
@@ -150,9 +173,7 @@ impl Default for GeminiClient {
 impl GeminiClient {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .build()
-                .unwrap_or_default(),
+            client: reqwest::Client::builder().build().unwrap_or_default(),
         }
     }
 
@@ -161,13 +182,13 @@ impl GeminiClient {
     fn request_timeout_for_text(text: &str) -> std::time::Duration {
         let word_count = text.split_whitespace().count() as u64;
         // ~140 WPM Vietnamese → estimated audio duration
-        let estimated_audio_secs = (word_count as f64 / 140.0 * 60.0) as u64;
+        let estimated_audio_secs = (word_count as f64 / 140.0 * SECONDS_PER_MINUTE) as u64;
         let timeout_secs = std::cmp::max(90, estimated_audio_secs * 3 + 30);
-        let capped = std::cmp::min(timeout_secs, 300); // Hard cap 5 minutes
+        let capped = std::cmp::min(timeout_secs, MAX_TIMEOUT_SECS); // Hard cap 5 minutes
         std::time::Duration::from_secs(capped)
     }
 
-    pub fn sanitize_pcm_bytes(raw_bytes: Vec<u8>) -> Vec<u8> {
+    pub fn sanitize_pcm_bytes(mut raw_bytes: Vec<u8>) -> Vec<u8> {
         // Check for RIFF WAV header
         if raw_bytes.len() > 44 && &raw_bytes[0..4] == b"RIFF" && &raw_bytes[8..12] == b"WAVE" {
             // Scan for the 'data' chunk instead of assuming 44-byte header
@@ -183,8 +204,14 @@ impl GeminiClient {
                 if chunk_id == b"data" {
                     let data_start = pos + 8;
                     let data_end = (data_start + chunk_size).min(raw_bytes.len());
-                    info!("Found 'data' chunk at byte offset {}. Extracting {} bytes of PCM.", data_start, data_end - data_start);
-                    return raw_bytes[data_start..data_end].to_vec();
+                    info!(
+                        "Found 'data' chunk at byte offset {}. Extracting {} bytes of PCM.",
+                        data_start,
+                        data_end - data_start
+                    );
+                    raw_bytes.truncate(data_end);
+                    raw_bytes.drain(0..data_start);
+                    return raw_bytes;
                 }
                 pos += 8 + chunk_size;
                 // Ensure 16-bit alignment for RIFF chunks
@@ -194,18 +221,24 @@ impl GeminiClient {
             }
             // Fallback to 44-byte strip if 'data' chunk not found
             info!("RIFF WAV detected but 'data' chunk not found. Falling back to 44-byte header strip.");
-            return raw_bytes[44..].to_vec();
+            raw_bytes.drain(0..44);
+            return raw_bytes;
         }
         raw_bytes
     }
 
-    pub fn extract_pcm_from_response(response: &GeminiGenerateContentResponse) -> Result<(Vec<u8>, String), ApiError> {
+    pub fn extract_pcm_from_response(
+        response: &GeminiGenerateContentResponse,
+    ) -> Result<(Vec<u8>, String), ApiError> {
         if let Some(candidates) = &response.candidates {
             for cand in candidates {
                 if let Some(content) = &cand.content {
                     for part in &content.parts {
                         if let Some(inline) = &part.inline_data {
-                            let mime = inline.mime_type.clone().unwrap_or_else(|| "audio/pcm".to_string());
+                            let mime = inline
+                                .mime_type
+                                .clone()
+                                .unwrap_or_else(|| "audio/pcm".to_string());
                             let raw = BASE64_STANDARD
                                 .decode(&inline.data)
                                 .map_err(|e| ApiError::Base64DecodeError(e.to_string()))?;
@@ -231,7 +264,11 @@ impl GeminiClient {
         }
 
         let clean_key = api_key.trim();
-        let target_voice = if voice.trim().is_empty() { "Kore" } else { voice.trim() };
+        let target_voice = if voice.trim().is_empty() {
+            "Kore"
+        } else {
+            voice.trim()
+        };
 
         // IMPORTANT: Use only the requested model. Do NOT fallback to a different model
         // mid-project, as mixing models causes voice character drift between chunks.
@@ -239,7 +276,12 @@ impl GeminiClient {
         let payload = GeminiGenerateContentRequest::new_tts_request(text, target_voice);
         let timeout = Self::request_timeout_for_text(text);
 
-        info!("Calling Gemini API [{}] voice [{}] timeout [{}s]...", model, target_voice, timeout.as_secs());
+        info!(
+            "Calling Gemini API [{}] voice [{}] timeout [{}s]...",
+            model,
+            target_voice,
+            timeout.as_secs()
+        );
 
         let res = self
             .client
@@ -259,17 +301,26 @@ impl GeminiClient {
                         Ok(parsed_response) => {
                             match Self::extract_pcm_from_response(&parsed_response) {
                                 Ok((pcm_bytes, mime)) => {
-                                    info!("Synthesized audio OK [{}]. Size: {} bytes, MIME: {}", model, pcm_bytes.len(), mime);
+                                    info!(
+                                        "Synthesized audio OK [{}]. Size: {} bytes, MIME: {}",
+                                        model,
+                                        pcm_bytes.len(),
+                                        mime
+                                    );
                                     // Basic audio validation: reject suspiciously small output
-                                    if pcm_bytes.len() < 1000 {
-                                        return Err(ApiError::CorruptAudio(
-                                            format!("Audio too small ({} bytes) — likely empty or corrupt", pcm_bytes.len())
-                                        ));
+                                    if pcm_bytes.len() < MIN_AUDIO_BYTES {
+                                        return Err(ApiError::CorruptAudio(format!(
+                                            "Audio too small ({} bytes) — likely empty or corrupt",
+                                            pcm_bytes.len()
+                                        )));
                                     }
                                     return Ok(pcm_bytes);
                                 }
                                 Err(e) => {
-                                    warn!("Gemini API [{}] response parsed but no audio data: {}", model, e);
+                                    warn!(
+                                        "Gemini API [{}] response parsed but no audio data: {}",
+                                        model, e
+                                    );
                                     return Err(e);
                                 }
                             }
@@ -283,7 +334,9 @@ impl GeminiClient {
                     return Err(ApiError::Unauthorized);
                 } else if status.as_u16() == 429 {
                     // Extract headers BEFORE consuming response body
-                    let retry_after = response.headers().get("retry-after")
+                    let retry_after = response
+                        .headers()
+                        .get("retry-after")
                         .and_then(|h| h.to_str().ok())
                         .and_then(|s| s.parse::<u64>().ok());
                     let err_body = response.text().await.unwrap_or_default();
@@ -295,7 +348,10 @@ impl GeminiClient {
                         warn!("Gemini API [{}] Daily quota exhausted (RPD).", model);
                         return Err(ApiError::RateLimitedDaily);
                     }
-                    warn!("Gemini API [{}] Rate Limited (429 RPM). Retry after {:?}s.", model, retry_after);
+                    warn!(
+                        "Gemini API [{}] Rate Limited (429 RPM). Retry after {:?}s.",
+                        model, retry_after
+                    );
                     return Err(ApiError::RateLimited(retry_after));
                 } else {
                     let err_text = response.text().await.unwrap_or_default();
@@ -306,8 +362,15 @@ impl GeminiClient {
             }
             Err(e) => {
                 if e.is_timeout() {
-                    warn!("Gemini API [{}] request timed out after {}s.", model, timeout.as_secs());
-                    return Err(ApiError::NetworkError(format!("Request timed out after {}s", timeout.as_secs())));
+                    warn!(
+                        "Gemini API [{}] request timed out after {}s.",
+                        model,
+                        timeout.as_secs()
+                    );
+                    return Err(ApiError::NetworkError(format!(
+                        "Request timed out after {}s",
+                        timeout.as_secs()
+                    )));
                 }
                 warn!("Network error calling Gemini API [{}]: {}", model, e);
                 return Err(ApiError::NetworkError(e.to_string()));
@@ -315,11 +378,7 @@ impl GeminiClient {
         }
     }
 
-    pub async fn generate_text(
-        &self,
-        api_key: &str,
-        prompt: &str,
-    ) -> Result<String, ApiError> {
+    pub async fn generate_text(&self, api_key: &str, prompt: &str) -> Result<String, ApiError> {
         if api_key.trim().is_empty() {
             return Err(ApiError::Unauthorized);
         }
@@ -506,4 +565,3 @@ mod tests {
         assert_eq!(FALLBACK_MODEL, "gemini-2.5-flash-preview-tts");
     }
 }
-

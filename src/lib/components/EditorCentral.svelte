@@ -2,12 +2,27 @@
   import { projectState } from "../state/projectState.svelte";
   import { uiState } from "../state/uiState.svelte";
   import { playerState } from "../state/playerState.svelte";
-  import type { SegmentRecord } from "../types/tts";
-  import { invoke } from "@tauri-apps/api/core";
+  import type { SegmentRecord, TextChunk } from "../types/tts";
+  import { 
+    getProjectSegments, 
+    splitSegment, 
+    mergeSegments, 
+    deleteSegment, 
+    deleteSegmentsBatch, 
+    moveSegment, 
+    insertSegmentAt,
+    rechunkProjectSegments,
+    chunkTextPreview
+  } from "../api/projectClient";
+  import { synthesizePreviewAudio } from "../api/audioClient";
   import { toastStore } from "../state/toasts.svelte";
   import { enqueueProject, pauseProject, resumeProject } from "../api/queueClient";
   import { getErrorMessage } from "../utils/errorUtils";
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import SegmentList from "./SegmentList.svelte";
+  import SmartErrorBanner from "./SmartErrorBanner.svelte";
+  import BatchActionsBar from "./BatchActionsBar.svelte";
 
   let searchQuery = $state("");
   let showReplace = $state(false);
@@ -41,27 +56,34 @@
 
   // Segment list derived from projectState or generated from source text
   let segments = $derived.by<SegmentRecord[]>(() => {
+    // If we have real segments from DB, use them
     if (projectState.segments.length > 0) return projectState.segments;
-    const lines = currentSource.split("\n").filter((l: string) => l.trim().length > 0);
-    return lines.map((line: string, idx: number): SegmentRecord => ({
-      id: `seg_${idx + 1}`,
-      project_id: projectState.currentProject?.id || "1",
-      position: idx + 1,
-      text: line,
-      spoken_text: projectState.computeSpokenText(line),
-      prompt: "Đọc tự nhiên, truyền cảm",
-      status: "pending",
-      is_locked: false,
-      is_skipped: false,
-      attempts: 0,
-      duration_ms: 0,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      attempt_count: 0,
-      cancel_requested: false,
-      state_revision: 1,
-      output_size: 0
-    }));
+    // Only generate fallback segments for new projects that haven't been saved yet
+    // (they have source_text but no segments in DB)
+    if (!projectState.currentProject?.id) {
+      const lines = currentSource.split("\n").filter((l: string) => l.trim().length > 0);
+      return lines.map((line: string, idx: number): SegmentRecord => ({
+        id: `seg_${idx + 1}`,
+        project_id: projectState.currentProject?.id || "1",
+        position: idx + 1,
+        text: line,
+        spoken_text: projectState.computeSpokenText(line),
+        prompt: "Đọc tự nhiên, truyền cảm",
+        status: "pending",
+        is_locked: false,
+        is_skipped: false,
+        attempts: 0,
+        duration_ms: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        attempt_count: 0,
+        cancel_requested: false,
+        state_revision: 1,
+        output_size: 0
+      }));
+    }
+    // Project exists in DB but segments not loaded yet — return empty, don't generate ghosts
+    return [];
   });
 
   // Derived completed segment count & guided workflow stepper step (R6)
@@ -98,32 +120,28 @@
 
   // Re-synthesize single segment (for R1 stale audio & R3 smart error recovery)
   async function handleResynthesizeSegment(seg: SegmentRecord) {
+    const projectId = projectState.currentProject?.id || seg.project_id;
+    if (!projectId) {
+      toastStore.showError("Không tìm thấy dự án.");
+      return;
+    }
+
     seg.audio_path = undefined;
     seg.status = 'processing';
     seg.error_message = undefined;
     seg.error_code = undefined;
     seg.last_error_message = undefined;
 
-    toastStore.showInfo(`Đang tạo lại âm thanh cho đoạn #${seg.position}...`);
+    toastStore.showInfo(`Đang đưa đoạn #${seg.position} vào hàng đợi thử lại...`);
     try {
-      const res = await invoke<{ data_url: string; duration_ms: number }>(
-        "synthesize_preview_audio",
-        {
-          text: seg.spoken_text || seg.text,
-          voice: seg.voice || projectState.currentProject?.voice || "Kore",
-          model: projectState.currentProject?.model || "gemini-3.1-flash-tts-preview",
-          speed: 1.0,
-          pitch: 1.0
-        }
-      );
-      seg.status = 'success';
-      seg.duration_ms = res.duration_ms;
-      playerState.playUrl(res.data_url, seg.id);
-      toastStore.showSuccess(`Đã tạo lại audio đoạn #${seg.position} thành công (${(res.duration_ms / 1000).toFixed(1)}s)!`);
+      await invoke('requeue_segment', { projectId, segmentId: seg.id });
+      // Update UI state to queued instead of waiting for sync
+      seg.status = 'queued';
+      toastStore.showSuccess(`Đã đưa đoạn #${seg.position} vào hàng đợi!`);
     } catch (err: unknown) {
       seg.status = 'failed';
       seg.error_message = getErrorMessage(err);
-      toastStore.showError(`Lỗi tạo lại đoạn #${seg.position}: ${getErrorMessage(err)}`);
+      toastStore.showError(`Lỗi khi đưa đoạn #${seg.position} vào hàng đợi: ${getErrorMessage(err)}`);
     }
   }
 
@@ -131,7 +149,14 @@
   let isRechunking = $state(false);
 
   async function handleRechunkAllText() {
-    if (!confirm("CẢNH BÁO: Hành động này sẽ chia lại toàn bộ văn bản và ghi đè lên các đoạn hiện tại. Các chỉnh sửa thủ công của bạn sẽ bị mất. Bạn có chắc chắn muốn tiếp tục?")) {
+    if (!confirm(
+      "⚠️ CẢNH BÁO — HÀNH ĐỘNG KHÔNG THỂ HOÀN TÁC\n\n" +
+      "Chia lại văn bản sẽ:\n" +
+      "• XÓA toàn bộ file audio đã tạo\n" +
+      "• XÓA mọi chỉnh sửa thủ công trên từng đoạn\n" +
+      "• Tạo lại segments mới — cần TỐN THÊM quota API để tổng hợp lại\n\n" +
+      "Bạn có chắc chắn muốn tiếp tục?"
+    )) {
       return;
     }
     const proj = projectState.currentProject;
@@ -151,16 +176,12 @@
       toastStore.showInfo("Đang tự động chia nhỏ văn bản theo tiêu đề, đoạn văn và câu...");
       
       if (proj?.id) {
-        const updatedSegs = await invoke<SegmentRecord[]>("rechunk_project_segments", {
-          projectId: proj.id,
-          sourceText: textToChunk,
-          mode: "auto"
-        });
+        const updatedSegs = await rechunkProjectSegments(proj.id, textToChunk, "auto");
         projectState.segments = updatedSegs;
         toastStore.showSuccess(`Đã tự động chia nhỏ thành ${updatedSegs.length} đoạn audio (30-60s)!`);
       } else {
-        const chunks = await invoke<any[]>("chunk_text_preview", { text: textToChunk, mode: "auto" });
-        const newSegs: SegmentRecord[] = chunks.map((c: any, idx: number) => ({
+        const chunks = await chunkTextPreview(textToChunk, "auto");
+        const newSegs: SegmentRecord[] = chunks.map((c: TextChunk, idx: number) => ({
           id: `seg_${idx + 1}`,
           project_id: "temp",
           position: idx + 1,
@@ -216,16 +237,13 @@
       isSynthesizingPreview = true;
       toastStore.showInfo(`Đang tạo giọng đọc (${voice}) cho đoạn #${seg?.position || 1}...`);
       
-      const res = await invoke<{ data_url: string; duration_ms: number; sample_rate: number }>(
-        "synthesize_preview_audio",
-        {
-          text: textToSynthesize,
-          voice,
-          model: projectState.currentProject?.model || "gemini-3.1-flash-tts-preview",
-          speed: 1.0,
-          pitch: 1.0
-        }
-      );
+      const res = await synthesizePreviewAudio({
+        text: textToSynthesize,
+        voice,
+        model: projectState.currentProject?.model || "gemini-3.1-flash-tts-preview",
+        speed: 1.0,
+        pitch: 1.0
+      });
 
       // LRU logic to prevent memory bloat
       if (previewAudioCache.size >= 10) {
@@ -267,16 +285,12 @@
     }
 
     try {
+      // Flush pending text edits before splitting to avoid data loss
+      await projectState.flushPendingSaves();
       toastStore.showInfo(`Đang tách đoạn #${seg.position} tại vị trí ký tự ${splitIndex}...`);
-      await invoke("split_segment", {
-        projectId: projectId,
-        segmentId: seg.id,
-        splitIndex: splitIndex
-      });
+      await splitSegment(projectId, seg.id, splitIndex);
       
-      const updatedSegs = await invoke<SegmentRecord[]>("get_project_segments", {
-        projectId: projectId
-      });
+      const updatedSegs = await getProjectSegments(projectId);
       projectState.segments = updatedSegs;
       toastStore.showSuccess(`Đã tách đoạn #${seg.position} thành 2 đoạn riêng biệt thành công!`);
     } catch (err: unknown) {
@@ -294,7 +308,7 @@
     try {
       toastStore.showInfo("Đang đưa các đoạn văn bản vào hàng đợi xử lý âm thanh...");
       await enqueueProject(projectId);
-      const updated = await invoke<SegmentRecord[]>("get_project_segments", { projectId });
+      const updated = await getProjectSegments(projectId);
       projectState.segments = updated;
       toastStore.showSuccess("Đã khởi động hàng đợi tạo âm thanh thành công!");
     } catch (err: unknown) {
@@ -314,14 +328,11 @@
       return;
     }
     try {
+      // Flush pending text edits before merging to avoid data loss
+      await projectState.flushPendingSaves();
       toastStore.showInfo(`Đang gộp đoạn #${seg.position} với đoạn #${seg.position - 1}...`);
-      await invoke("merge_segments", {
-        projectId: projectId,
-        segmentId: seg.id
-      });
-      const updatedSegs = await invoke<SegmentRecord[]>("get_project_segments", {
-        projectId: projectId
-      });
+      await mergeSegments(projectId, seg.id);
+      const updatedSegs = await getProjectSegments(projectId);
       projectState.segments = updatedSegs;
       toastStore.showSuccess(`Đã gộp thành công thành đoạn #${seg.position - 1}!`);
     } catch (err: unknown) {
@@ -377,9 +388,11 @@
     }
 
     try {
+      // Flush pending text edits before deleting to avoid data loss
+      await projectState.flushPendingSaves();
       toastStore.showInfo(`Đang xóa đoạn #${seg.position}...`);
-      await invoke("delete_segment", { projectId, segmentId: seg.id });
-      const updated = await invoke<SegmentRecord[]>("get_project_segments", { projectId });
+      await deleteSegment(projectId, seg.id);
+      const updated = await getProjectSegments(projectId);
       projectState.segments = updated;
       const nextSel = new Set(selectedSegmentIds);
       nextSel.delete(seg.id);
@@ -413,9 +426,11 @@
     }
 
     try {
+      // Flush pending text edits before batch deleting to avoid data loss
+      await projectState.flushPendingSaves();
       toastStore.showInfo(`Đang xóa ${ids.length} đoạn đã chọn...`);
-      await invoke("delete_segments_batch", { projectId, segmentIds: ids });
-      const updated = await invoke<SegmentRecord[]>("get_project_segments", { projectId });
+      await deleteSegmentsBatch(projectId, ids);
+      const updated = await getProjectSegments(projectId);
       projectState.segments = updated;
       selectedSegmentIds.clear();
       toastStore.showSuccess(`Đã xóa ${ids.length} đoạn thành công!`);
@@ -431,8 +446,10 @@
       return;
     }
     try {
-      await invoke("move_segment", { projectId, segmentId: seg.id, direction });
-      const updated = await invoke<SegmentRecord[]>("get_project_segments", { projectId });
+      // Flush pending text edits before moving to avoid stale positions
+      await projectState.flushPendingSaves();
+      await moveSegment(projectId, seg.id, direction);
+      const updated = await getProjectSegments(projectId);
       projectState.segments = updated;
     } catch (err: unknown) {
       toastStore.showError(`Lỗi di chuyển đoạn: ${getErrorMessage(err)}`);
@@ -471,8 +488,8 @@
 
     try {
       toastStore.showInfo(`Đang thêm đoạn mới phía dưới đoạn #${seg.position}...`);
-      await invoke("insert_segment_at", { projectId, position: targetPos, text: "Đoạn văn bản mới..." });
-      const updated = await invoke<SegmentRecord[]>("get_project_segments", { projectId });
+      await insertSegmentAt(projectId, targetPos, "Đoạn văn bản mới...");
+      const updated = await getProjectSegments(projectId);
       projectState.segments = updated;
       toastStore.showSuccess(`Đã thêm đoạn mới ở vị trí #${targetPos}!`);
     } catch (err: unknown) {
@@ -546,35 +563,10 @@
 
   <!-- Smart Error Recovery Banner (R3) -->
   {#if activeErrorSegment}
-    <div class="smart-error-banner" role="alert">
-      <div class="error-info">
-        <span class="error-icon">⚠️</span>
-        <div class="error-text">
-          <strong>Sự cố API ({activeErrorSegment.error_code || '429'}):</strong> 
-          Đoạn #{activeErrorSegment.position} {activeErrorSegment.error_message || activeErrorSegment.last_error_message || 'gặp sự cố khi kết nối Gemini API (Quá giới hạn quota hoặc API key không hợp lệ).'}
-        </div>
-      </div>
-      <div class="error-actions">
-        <button class="btn-banner secondary" onclick={() => uiState.showApiKeyModal = true}>
-          🔑 Đổi API Key & Tiếp Tục
-        </button>
-        <button class="btn-banner primary" onclick={() => handleResynthesizeSegment(activeErrorSegment)}>
-          🔄 Thử Lại Đoạn #{activeErrorSegment.position}
-        </button>
-        <button class="btn-banner" style="background: var(--color-success-bg); color: var(--color-success-text); border: 1px solid var(--color-success-border);" onclick={async () => {
-          if (projectState.currentProject?.id) {
-            try {
-              await resumeProject(projectState.currentProject.id);
-              toastStore.showSuccess("Đã tiếp tục chạy hàng đợi.");
-            } catch (err) {
-              toastStore.showError(getErrorMessage(err));
-            }
-          }
-        }}>
-          ▶ Tiếp Tục Hàng Đợi
-        </button>
-      </div>
-    </div>
+    <SmartErrorBanner
+      {activeErrorSegment}
+      onResynthesize={(seg) => handleResynthesizeSegment(seg)}
+    />
   {/if}
 
   <!-- Offline Detection Banner -->
@@ -589,171 +581,32 @@
       <!-- Segments List / Editor View -->
       <div class="segments-list" role="feed" aria-label="Danh sách đoạn văn bản">
         <!-- Batch Segment Action Bar -->
-        {#if selectedSegmentIds.size > 0}
-          <div class="segment-batch-toolbar active">
-            <label class="select-all-segments-label">
-              <input type="checkbox" checked={isAllSegmentsSelected} onchange={toggleSelectAllSegments} />
-              Chọn tất cả
-            </label>
-            <div class="batch-segment-actions">
-              <span class="selected-count">Đã chọn <strong>{selectedSegmentIds.size}</strong> đoạn</span>
-              <button class="btn btn-danger btn-sm" onclick={handleDeleteSelectedSegments}>
-                🗑️ Xóa hàng loạt
-              </button>
-            </div>
-          </div>
-        {/if}
+        <BatchActionsBar
+          selectedCount={selectedSegmentIds.size}
+          isAllSelected={isAllSegmentsSelected}
+          onToggleSelectAll={toggleSelectAllSegments}
+          onDeleteSelected={handleDeleteSelectedSegments}
+        />
 
-        {#each segments as seg (seg.id)}
-          <div 
-            id={`seg_card_${seg.id}`}
-            class="segment-row {selectedSegmentIds.has(seg.id) ? 'selected-batch' : ''} {projectState.activeSegmentId === seg.id ? 'selected' : ''} {playerState.currentPlayingSegmentId === seg.id ? 'playing' : ''} {seg.status === 'processing' || seg.status === 'queued' ? 'processing-active' : ''} {seg.is_locked ? 'locked' : ''} {seg.is_skipped ? 'skipped' : ''}"
-            onclick={() => handleSegmentClick(seg)}
-            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleSegmentClick(seg); }}
-            role="button"
-            tabindex="0"
-            aria-label={`Đoạn ${seg.position}, trạng thái ${seg.status}`}
-          >
-            <!-- Line Number & Indicators -->
-            <div class="segment-meta">
-              <input 
-                type="checkbox" 
-                class="seg-checkbox"
-                checked={selectedSegmentIds.has(seg.id)} 
-                onclick={(e) => toggleSelectSegment(seg.id, e)}
-                title="Chọn đoạn này"
-              />
-              <span class="seg-num">#{seg.position}</span>
-              {#if seg.is_locked}
-                <span class="status-icon" title="Đoạn bị khóa">🔒</span>
-              {/if}
-              {#if seg.is_skipped}
-                <span class="status-icon" title="Đã đánh dấu bỏ qua">⏭️</span>
-              {/if}
-              {#if seg.text.length > 700}
-                <span class="warning-badge" title="Đoạn quá dài (> 700 ký tự). Bạn có thể bấm nút ✂️ Tách đoạn.">⚠️ Quá dài</span>
-              {/if}
-            </div>
-
-            <!-- Segment Text Display / Editor -->
-            <div class="segment-body">
-                <textarea 
-                  id={`textarea-${seg.id}`}
-                  bind:this={textareaElements[seg.id]}
-                  class="segment-textarea" 
-                  bind:value={seg.text}
-                  oninput={() => handleSegmentTextInput(seg)}
-                  aria-label={`Nội dung đoạn ${seg.position}`}
-                ></textarea>
-
-              <div class="segment-footer-info">
-                <span>{seg.text.length} ký tự</span>
-                {#if seg.duration_ms > 0}
-                  <span class="duration-badge">⏱️ {(seg.duration_ms / 1000).toFixed(1)}s</span>
-                {/if}
-
-                {#if seg.status === 'approved'}
-                  <span class="status-approved" title="Đã duyệt">⭐</span>
-                {:else if seg.status === 'success'}
-                  <span class="status-success" title="Đã tạo âm thanh">🟢</span>
-                {:else if seg.status === 'processing' || seg.status === 'queued'}
-                  <div class="status-processing-box">
-                    <div class="sound-wave-anim" title="Đang tổng hợp âm thanh với Gemini API">
-                      <span class="bar bar-1"></span>
-                      <span class="bar bar-2"></span>
-                      <span class="bar bar-3"></span>
-                    </div>
-                  </div>
-                {:else if seg.status === 'failed'}
-                  <span class="status-error" title="Lỗi API">🔴</span>
-                {:else if seg.status === 'retry_wait'}
-                  <span class="status-warning" title="Đang chờ thử lại">🔄</span>
-                {:else if seg.status === 'stale'}
-                  <span class="status-warning badge-stale" title="Văn bản đã thay đổi, cần tạo lại âm thanh">⚠️</span>
-                {:else}
-                  <span class="status-pending" title="Chưa tạo âm thanh">⚪</span>
-                {/if}
-              </div>
-            </div>
-
-            <!-- Segment Quick Actions -->
-            <div class="segment-actions">
-              <button 
-                class="btn-action" 
-                onclick={(e) => { e.stopPropagation(); handlePlayPreview(seg); }}
-                disabled={isSynthesizingPreview}
-                title="Nghe thử đoạn này"
-                aria-label="Nghe thử"
-              >
-                ▶
-              </button>
-              {#if seg.status === 'stale'}
-                <button 
-                  class="btn-action btn-resynthesize" 
-                  onclick={(e) => { e.stopPropagation(); handleResynthesizeSegment(seg); }}
-                  title="Tạo lại đoạn này ngay"
-                  aria-label="Tạo lại đoạn này"
-                >
-                  ⚡
-                </button>
-              {/if}
-              <button 
-                class="btn-action btn-secondary-action" 
-                onclick={(e) => { e.stopPropagation(); handleSplitSegment(seg); }}
-                title="Tách đoạn tại vị trí con trỏ"
-                aria-label="Tách đoạn"
-              >
-                ✂️
-              </button>
-              {#if seg.position > 1}
-                <button 
-                  class="btn-action btn-secondary-action" 
-                  onclick={(e) => { e.stopPropagation(); handleMoveSegment(seg, 'up'); }}
-                  title="Di chuyển lên trên"
-                  aria-label="Di chuyển lên"
-                >
-                  ⬆️
-                </button>
-              {/if}
-              {#if seg.position < segments.length}
-                <button 
-                  class="btn-action btn-secondary-action" 
-                  onclick={(e) => { e.stopPropagation(); handleMoveSegment(seg, 'down'); }}
-                  title="Di chuyển xuống dưới"
-                  aria-label="Di chuyển xuống"
-                >
-                  ⬇️
-                </button>
-              {/if}
-              <button 
-                class="btn-action btn-secondary-action" 
-                onclick={(e) => { e.stopPropagation(); handleInsertSegmentBelow(seg); }}
-                title="Chèn thêm đoạn mới bên dưới"
-                aria-label="Chèn đoạn mới"
-              >
-                ➕
-              </button>
-              {#if seg.position > 1}
-                <button 
-                  class="btn-action btn-merge btn-secondary-action" 
-                  onclick={(e) => { e.stopPropagation(); handleMergeWithPrevious(seg); }}
-                  title="Gộp với đoạn #{seg.position - 1} phía trên"
-                  aria-label="Gộp đoạn"
-                >
-                  🔗
-                </button>
-              {/if}
-              <button 
-                class="btn-action btn-delete-segment" 
-                onclick={(e) => { e.stopPropagation(); handleDeleteSingleSegment(seg); }}
-                title="Xóa đoạn này"
-                aria-label="Xóa đoạn"
-              >
-                🗑️
-              </button>
-            </div>
-          </div>
-        {/each}
+        <SegmentList
+          {segments}
+          {selectedSegmentIds}
+          {isSynthesizingPreview}
+          registerTextarea={(id, el) => {
+            if (el) textareaElements[id] = el;
+            else delete textareaElements[id];
+          }}
+          onSelectSegment={(id, e) => toggleSelectSegment(id, e)}
+          onSegmentClick={(seg) => handleSegmentClick(seg)}
+          onSegmentTextInput={(seg) => handleSegmentTextInput(seg)}
+          onPlayPreview={(seg) => handlePlayPreview(seg)}
+          onResynthesizeSegment={(seg) => handleResynthesizeSegment(seg)}
+          onSplitSegment={(seg) => handleSplitSegment(seg)}
+          onMoveSegment={(seg, dir) => handleMoveSegment(seg, dir)}
+          onInsertSegmentBelow={(seg) => handleInsertSegmentBelow(seg)}
+          onMergeWithPrevious={(seg) => handleMergeWithPrevious(seg)}
+          onDeleteSingleSegment={(seg) => handleDeleteSingleSegment(seg)}
+        />
       </div>
     </div>
 </div>

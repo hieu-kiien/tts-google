@@ -20,48 +20,56 @@ pub struct DatabaseManager {
 
 impl DatabaseManager {
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, String> {
-        let conn = Connection::open(db_path)
-            .map_err(|e| format!("Failed to open SQLite database: {}", e))?;
+        let path = db_path.as_ref();
+        if path.exists() {
+            Self::backup_db(path)?;
+        }
+
+        let conn =
+            Connection::open(path).map_err(|e| format!("Failed to open SQLite database: {}", e))?;
+
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+            .map_err(|e| format!("Failed to set PRAGMAs: {}", e))?;
 
         let db = Self {
             conn: Mutex::new(conn),
         };
 
-        db.apply_pragmas()?;
         db.run_migrations()?;
         Ok(db)
+    }
+
+    pub fn backup_db<P: AsRef<Path>>(db_path: P) -> Result<(), String> {
+        let path = db_path.as_ref();
+        if path.exists() {
+            let backup_path = path.with_extension("db.bak_v1");
+            std::fs::copy(path, &backup_path)
+                .map_err(|e| format!("Failed to create DB backup before migration: {}", e))?;
+            info!("Database backup created at {:?}", backup_path);
+        }
+        Ok(())
     }
 
     pub fn in_memory() -> Result<Self, String> {
         let conn = Connection::open_in_memory()
             .map_err(|e| format!("Failed to open in-memory SQLite: {}", e))?;
 
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+            .map_err(|e| format!("Failed to set PRAGMAs: {}", e))?;
+
         let db = Self {
             conn: Mutex::new(conn),
         };
 
-        db.apply_pragmas()?;
         db.run_migrations()?;
         Ok(db)
     }
 
-    fn apply_pragmas(&self) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-            PRAGMA foreign_keys = ON;
-            PRAGMA synchronous = FULL;
-            PRAGMA busy_timeout = 5000;
-            ",
-        )
-        .map_err(|e| format!("Failed to set SQLite PRAGMAs: {}", e))?;
-        Ok(())
-    }
-
     fn run_migrations(&self) -> Result<(), String> {
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction().map_err(|e| format!("Failed to start migration transaction: {}", e))?;
+        let mut conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start migration transaction: {}", e))?;
 
         tx.execute_batch(
             "
@@ -159,24 +167,43 @@ impl DatabaseManager {
             "ALTER TABLE segments ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE segments ADD COLUMN state_revision INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE segments ADD COLUMN output_size INTEGER DEFAULT 0;",
+            "ALTER TABLE segments ADD COLUMN synthesis_status TEXT;",
+            "ALTER TABLE segments ADD COLUMN review_status TEXT NOT NULL DEFAULT 'unreviewed';",
+            "ALTER TABLE segments ADD COLUMN reviewed_output_fingerprint TEXT;",
         ];
 
         for query in alter_queries {
             let _ = tx.execute(query, []);
         }
 
-        tx.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (1);", [])
-            .map_err(|e| format!("Failed to record schema version: {}", e))?;
+        // Migrate status column to synthesis_status & review_status for DB v2
+        let _ = tx.execute(
+            "UPDATE segments SET
+                synthesis_status = CASE WHEN status = 'approved' THEN 'success' ELSE status END,
+                review_status = CASE WHEN status = 'approved' THEN 'approved' ELSE 'unreviewed' END,
+                reviewed_output_fingerprint = CASE WHEN status = 'approved' THEN output_fingerprint ELSE NULL END
+             WHERE synthesis_status IS NULL;",
+            [],
+        );
 
-        tx.commit().map_err(|e| format!("Failed to commit schema migration: {}", e))?;
+        tx.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (2);",
+            [],
+        )
+        .map_err(|e| format!("Failed to record schema version: {}", e))?;
 
-        info!("SQLite database migrations (schema v1) and WAL pragmas executed successfully.");
+        tx.commit()
+            .map_err(|e| format!("Failed to commit schema migration: {}", e))?;
+
+        info!("SQLite database migrations (schema v2) and WAL pragmas executed successfully.");
         Ok(())
     }
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, String> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1").map_err(|e| e.to_string())?;
+        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT value FROM settings WHERE key = ?1")
+            .map_err(|e| e.to_string())?;
         let mut rows = stmt.query([key]).map_err(|e| e.to_string())?;
         if let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let val: String = row.get(0).map_err(|e| e.to_string())?;
@@ -187,7 +214,7 @@ impl DatabaseManager {
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -197,8 +224,13 @@ impl DatabaseManager {
         Ok(())
     }
 
-    pub fn record_quota_metric(&self, chars: usize, is_rate_limit: bool, latency_ms: u64) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+    pub fn record_quota_metric(
+        &self,
+        chars: usize,
+        is_rate_limit: bool,
+        latency_ms: u64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let rate_inc = if is_rate_limit { 1 } else { 0 };
         let req_inc = if is_rate_limit { 0 } else { 1 };
@@ -218,10 +250,15 @@ impl DatabaseManager {
     }
 
     pub fn get_quota_metrics(&self) -> Result<QuotaMetrics, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-        let (today_requests, today_chars, today_rate_limits, today_total_latency): (u64, u64, u64, u64) = conn
+        let (today_requests, today_chars, today_rate_limits, today_total_latency): (
+            u64,
+            u64,
+            u64,
+            u64,
+        ) = conn
             .query_row(
                 "SELECT requests_count, chars_count, rate_limits_count, total_latency_ms
                  FROM quota_logs WHERE date = ?1",
@@ -255,47 +292,56 @@ impl DatabaseManager {
     }
 
     pub fn get_schema_version(&self) -> Result<i32, String> {
-        let conn = self.conn.lock().unwrap();
-        let ver: i32 = conn.query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
+        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let ver: i32 = conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .map_err(|e| format!("Failed to query schema version: {}", e))?;
         Ok(ver)
     }
 
     pub fn recover_expired_jobs(&self) -> Result<usize, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64;
 
-        let reset_count = conn.execute(
-            "UPDATE segments
+        let reset_count = conn
+            .execute(
+                "UPDATE segments
              SET status = 'queued',
                  lease_owner = NULL,
                  lease_expires_at = NULL,
                  state_revision = state_revision + 1
              WHERE status = 'processing'
                AND (lease_expires_at IS NULL OR lease_expires_at < ?1)",
-            [now_ms],
-        ).map_err(|e| format!("Failed to recover expired jobs: {}", e))?;
+                [now_ms],
+            )
+            .map_err(|e| format!("Failed to recover expired jobs: {}", e))?;
 
         if reset_count > 0 {
-            info!("Recovered {} expired/orphaned processing segment jobs to 'queued'", reset_count);
+            info!(
+                "Recovered {} expired/orphaned processing segment jobs to 'queued'",
+                reset_count
+            );
         }
         Ok(reset_count)
     }
 
     pub fn quick_check(&self) -> Result<bool, String> {
-        let conn = self.conn.lock().unwrap();
-        let result: String = conn.query_row("PRAGMA quick_check;", [], |r| r.get(0))
+        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let result: String = conn
+            .query_row("PRAGMA quick_check;", [], |r| r.get(0))
             .map_err(|e| format!("Quick check failed: {}", e))?;
         Ok(result == "ok")
     }
 
     pub fn foreign_key_check(&self) -> Result<bool, String> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("PRAGMA foreign_key_check;").map_err(|e| e.to_string())?;
-        let rows = stmt.query([]) .map_err(|e| e.to_string())?;
+        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let mut stmt = conn
+            .prepare("PRAGMA foreign_key_check;")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query([]).map_err(|e| e.to_string())?;
         // If no rows returned, foreign key integrity is clean
         let has_errors = rows.mapped(|_| Ok(())).next().is_some();
         Ok(!has_errors)
@@ -305,7 +351,7 @@ impl DatabaseManager {
     where
         F: FnOnce(&Connection) -> SqlResult<R>,
     {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
         f(&conn).map_err(|e| format!("Database query failed: {}", e))
     }
 
@@ -313,7 +359,7 @@ impl DatabaseManager {
     where
         F: FnOnce(&mut Connection) -> SqlResult<R>,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
         f(&mut conn).map_err(|e| format!("Database mutation failed: {}", e))
     }
 }
@@ -343,6 +389,27 @@ mod tests {
     #[test]
     fn test_schema_version_tracking() {
         let db = DatabaseManager::in_memory().expect("Should init in-memory DB");
-        assert_eq!(db.get_schema_version().unwrap(), 1);
+        assert_eq!(db.get_schema_version().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_db_v1_fixture_creation() {
+        let db = DatabaseManager::in_memory().expect("Should init in-memory DB");
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO projects (id, name, source_text, model, voice, preset, pacing, output_directory, status, created_at, updated_at)
+                 VALUES ('proj_v1', 'Test Project V1', 'Nội dung v1', 'gemini-3.1-flash-tts-preview', 'Puck', 'default', '1.0', '/tmp', 'completed', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO segments (id, project_id, position, text, prompt, status, attempts, created_at, updated_at)
+                 VALUES ('seg_v1', 'proj_v1', 1, 'Đoạn 1', 'Prompt 1', 'approved', 0, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+                [],
+            )?;
+            let count: i64 = conn.query_row("SELECT count(*) FROM segments WHERE status = 'approved'", [], |r| r.get(0))?;
+            assert_eq!(count, 1);
+            Ok(())
+        })
+        .expect("DB v1 sample fixture insertion should succeed");
     }
 }
