@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use tauri::Manager;
+
 pub mod api;
 pub mod audio;
 pub mod commands;
@@ -10,12 +13,10 @@ pub mod storage;
 pub mod text;
 
 #[cfg(test)]
-pub mod integration_tests;
+mod integration_tests;
 
 use queue::worker::QueueService;
 use state::app_state::AppState;
-use std::sync::Arc;
-use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -80,13 +81,10 @@ pub fn run() {
             commands::project_commands::insert_segment_at,
             commands::project_commands::move_segment,
             commands::audio_commands::merge_project_audio,
-            commands::audio_commands::export_project_srt,
-            commands::audio_commands::export_project_vtt,
-            commands::audio_commands::export_project_lrc,
-            commands::audio_commands::export_project_m4b_manifest,
-            commands::audio_commands::save_single_segment_audio,
-            commands::audio_commands::read_audio_data_url,
-            commands::audio_commands::write_binary_file,
+            commands::audio_commands::export_project_subtitles,
+            commands::audio_commands::export_audio_file,
+            commands::audio_commands::read_audio_as_base64,
+            commands::audio_commands::check_audio_file_exists,
             commands::dialog_commands::pick_output_folder,
             commands::dialog_commands::save_master_wav_dialog,
             commands::dialog_commands::save_srt_file_dialog,

@@ -1,3 +1,4 @@
+use crate::error::AppResult;
 use crate::state::app_state::AppState;
 use crate::storage::db::QuotaMetrics;
 use serde::{Deserialize, Serialize};
@@ -10,16 +11,13 @@ pub struct AppSettings {
 }
 
 #[tauri::command]
-pub async fn get_app_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
+pub async fn get_app_settings(state: State<'_, AppState>) -> AppResult<AppSettings> {
     let concurrency = state.concurrency.load(Ordering::Relaxed);
     Ok(AppSettings { concurrency })
 }
 
 #[tauri::command]
-pub async fn update_app_settings(
-    concurrency: u32,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn update_app_settings(concurrency: u32, state: State<'_, AppState>) -> AppResult<()> {
     let valid_concurrency = concurrency.clamp(1, 5);
     state
         .concurrency
@@ -32,10 +30,9 @@ pub async fn update_app_settings(
 }
 
 #[tauri::command]
-pub async fn get_quota_metrics(state: State<'_, AppState>) -> Result<QuotaMetrics, String> {
+pub async fn get_quota_metrics(state: State<'_, AppState>) -> AppResult<QuotaMetrics> {
     if let Some(ref db) = state.db {
         let mut metrics = db.get_quota_metrics().unwrap_or_default();
-        // Combine in-memory counters for live updates
         let mem_reqs = state.total_requests.load(Ordering::Relaxed);
         let mem_chars = state.total_chars.load(Ordering::Relaxed);
         let mem_rate_limits = state.rate_limit_hits.load(Ordering::Relaxed);

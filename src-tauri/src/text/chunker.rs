@@ -461,7 +461,7 @@ impl VietnameseChunker {
         while let Some((i, ch)) = iter.next() {
             if is_sentence_ending(ch) {
                 let mut end_byte = i + ch.len_utf8();
-                
+
                 while let Some(&(next_i, next_ch)) = iter.peek() {
                     if is_sentence_ending(next_ch) {
                         end_byte = next_i + next_ch.len_utf8();
@@ -511,7 +511,12 @@ impl VietnameseChunker {
         sentences
     }
 
-    fn is_abbreviation_or_number(&self, full_text: &str, start_byte: usize, end_byte: usize) -> bool {
+    fn is_abbreviation_or_number(
+        &self,
+        full_text: &str,
+        start_byte: usize,
+        end_byte: usize,
+    ) -> bool {
         let dot_char_opt = full_text[..end_byte].chars().next_back();
         if dot_char_opt.is_none() {
             return false;

@@ -1,7 +1,7 @@
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
-use rusqlite::types::{FromSql, FromSqlResult, FromSqlError, ValueRef, ToSql, ToSqlOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,7 +63,78 @@ impl ToSql for SegmentStatus {
 
 impl FromSql for SegmentStatus {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        value.as_str()?.parse().map_err(|err_msg| FromSqlError::Other(Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, err_msg))))
+        value.as_str()?.parse().map_err(|err_msg| {
+            FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                err_msg,
+            )))
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SynthesisStatus {
+    Pending,
+    Queued,
+    Processing,
+    Success,
+    RetryWait,
+    Failed,
+    Stale,
+}
+
+impl SynthesisStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Queued => "queued",
+            Self::Processing => "processing",
+            Self::Success => "success",
+            Self::RetryWait => "retry_wait",
+            Self::Failed => "failed",
+            Self::Stale => "stale",
+        }
+    }
+}
+
+impl fmt::Display for SynthesisStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl FromStr for SynthesisStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "queued" => Ok(Self::Queued),
+            "processing" => Ok(Self::Processing),
+            "success" => Ok(Self::Success),
+            "retry_wait" => Ok(Self::RetryWait),
+            "failed" => Ok(Self::Failed),
+            "stale" => Ok(Self::Stale),
+            other => Err(format!("Invalid SynthesisStatus: '{}'", other)),
+        }
+    }
+}
+
+impl ToSql for SynthesisStatus {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for SynthesisStatus {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        value.as_str()?.parse().map_err(|err_msg| {
+            FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                err_msg,
+            )))
+        })
     }
 }
 
@@ -82,6 +153,12 @@ impl ReviewStatus {
             Self::Approved => "approved",
             Self::NeedsFix => "needs_fix",
         }
+    }
+}
+
+impl fmt::Display for ReviewStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -106,6 +183,11 @@ impl ToSql for ReviewStatus {
 
 impl FromSql for ReviewStatus {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        value.as_str()?.parse().map_err(|err_msg| FromSqlError::Other(Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, err_msg))))
+        value.as_str()?.parse().map_err(|err_msg| {
+            FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                err_msg,
+            )))
+        })
     }
 }

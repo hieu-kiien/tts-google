@@ -9,6 +9,7 @@
     segments: SegmentRecord[];
     selectedSegmentIds: Set<string>;
     isSynthesizingPreview: boolean;
+    autoScrollEnabled?: boolean;
     registerTextarea?: (id: string, el: HTMLTextAreaElement | null) => void;
     onSelectSegment: (id: string, e: MouseEvent) => void;
     onSegmentClick: (seg: SegmentRecord) => void;
@@ -26,6 +27,7 @@
     segments,
     selectedSegmentIds,
     isSynthesizingPreview,
+    autoScrollEnabled = true,
     registerTextarea,
     onSelectSegment,
     onSegmentClick,
@@ -60,9 +62,9 @@
     };
   }
 
-  // Auto-scroll to active playing segment
+  // Auto-scroll to active playing segment only if autoScrollEnabled is true
   $effect(() => {
-    if (playerState.currentPlayingSegmentId) {
+    if (autoScrollEnabled && playerState.currentPlayingSegmentId) {
       const idx = segments.findIndex(s => s.id === playerState.currentPlayingSegmentId);
       if (idx !== -1) {
         $virtualizer.scrollToIndex(idx, { align: "auto" });

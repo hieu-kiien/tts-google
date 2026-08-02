@@ -359,8 +359,15 @@ impl QueueService {
 
         let segs = ProjectRepository::get_segments_for_project(db, project_id).unwrap_or_default();
         let total = segs.len();
-        let completed = segs.iter().filter(|s| s.status == "success").count();
-        let failed = segs.iter().filter(|s| s.status == "failed").count();
+        use crate::models::segment::SegmentStatus;
+        let completed = segs
+            .iter()
+            .filter(|s| s.status == SegmentStatus::Success || s.status == SegmentStatus::Approved)
+            .count();
+        let failed = segs
+            .iter()
+            .filter(|s| s.status == SegmentStatus::Failed)
+            .count();
         let pending = total.saturating_sub(completed + failed);
         let max_rev = segs.iter().map(|s| s.state_revision).max().unwrap_or(0);
 
@@ -390,9 +397,11 @@ impl QueueService {
             Some(d) => d,
             None => return (0, 0, 0),
         };
-        crate::storage::project_repo::ProjectRepository::get_segment_counts(db, project_id).unwrap_or((0, 0, 0))
+        crate::storage::project_repo::ProjectRepository::get_segment_counts(db, project_id)
+            .unwrap_or((0, 0, 0))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_progress_event(
         handle: &tauri::AppHandle,
         stream_id: &str,
@@ -422,6 +431,7 @@ impl QueueService {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn save_synthesis_output(
         app_state: &AppState,
         project_id: &str,
@@ -494,12 +504,18 @@ impl QueueService {
                         Ok(true)
                     }
                     Ok(false) => {
-                        warn!("Segment {} was modified during processing, discarding stale audio", task.id);
+                        warn!(
+                            "Segment {} was modified during processing, discarding stale audio",
+                            task.id
+                        );
                         let _ = std::fs::remove_file(&wav_path_str);
                         Ok(false)
                     }
                     Err(e) => {
-                        error!("Failed to commit task result for segment {}: {}", task.id, e);
+                        error!(
+                            "Failed to commit task result for segment {}: {}",
+                            task.id, e
+                        );
                         Err(e.to_string())
                     }
                 }
@@ -531,6 +547,7 @@ impl QueueService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_synthesis_error(
         app_state: &AppState,
         project_id: &str,
@@ -558,7 +575,10 @@ impl QueueService {
             )
         } else if err.is_rate_limit {
             (
-                format!("Đã đạt giới hạn tốc độ yêu cầu (Rate Limit 429). Đang chờ thử lại sau {}s...", err.retry_after_secs.unwrap_or(10)),
+                format!(
+                    "Đã đạt giới hạn tốc độ yêu cầu (Rate Limit 429). Đang chờ thử lại sau {}s...",
+                    err.retry_after_secs.unwrap_or(10)
+                ),
                 "429_RATE_LIMITED",
             )
         } else if err.code.contains("ContentFiltered") {
@@ -618,12 +638,18 @@ impl QueueService {
                 warn!("Key daily quota exhausted, switching to another key...");
                 return true;
             } else {
-                warn!("All {} keys exhausted daily quota. Pausing worker for 60s.", key_count);
-                let _ = handle.emit("queue-paused", serde_json::json!({
-                    "project_id": project_id,
-                    "reason": "quota_exhausted",
-                    "message": friendly_msg
-                }));
+                warn!(
+                    "All {} keys exhausted daily quota. Pausing worker for 60s.",
+                    key_count
+                );
+                let _ = handle.emit(
+                    "queue-paused",
+                    serde_json::json!({
+                        "project_id": project_id,
+                        "reason": "quota_exhausted",
+                        "message": friendly_msg
+                    }),
+                );
                 let sleep_duration = err.retry_after_secs.unwrap_or(60);
                 sleep(Duration::from_secs(sleep_duration)).await;
                 *consecutive_quota_errors = 0;
@@ -850,7 +876,9 @@ impl QueueService {
                         &api_key,
                         &mut consecutive_quota_errors,
                         &handle,
-                    ).await {
+                    )
+                    .await
+                    {
                         continue;
                     }
                 }

@@ -1,8 +1,8 @@
 use crate::storage::db::DatabaseManager;
 use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
-use tracing::{info, warn};
 use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 
 const MS_PER_SEC: u64 = 1000;
 
@@ -22,7 +22,7 @@ pub struct ProjectRecord {
     pub updated_at: String,
 }
 
-pub use crate::models::segment::{SegmentStatus, ReviewStatus};
+pub use crate::models::segment::{ReviewStatus, SegmentStatus, SynthesisStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SegmentRecord {
@@ -31,7 +31,7 @@ pub struct SegmentRecord {
     pub position: usize,
     pub text: String,
     pub prompt: String,
-    pub status: String,
+    pub status: SegmentStatus,
     pub attempts: u32,
     pub audio_path: Option<String>,
     pub duration_ms: u64,
@@ -54,8 +54,8 @@ pub struct SegmentRecord {
     pub state_revision: u64,
     pub output_size: u64,
     pub voice: Option<String>,
-    pub synthesis_status: Option<String>,
-    pub review_status: Option<String>,
+    pub synthesis_status: Option<SynthesisStatus>,
+    pub review_status: Option<ReviewStatus>,
     pub reviewed_output_fingerprint: Option<String>,
 }
 
@@ -454,14 +454,14 @@ impl ProjectRepository {
                  FROM segments 
                  WHERE project_id = ?1"
             )?;
-            
+
             let (total, completed, failed) = stmt.query_row(params![project_id], |row| {
                 let total: i64 = row.get(0).unwrap_or(0);
                 let completed: i64 = row.get(1).unwrap_or(0);
                 let failed: i64 = row.get(2).unwrap_or(0);
                 Ok((total as usize, completed as usize, failed as usize))
             })?;
-            
+
             Ok((total, completed, failed))
         })
     }
@@ -471,9 +471,10 @@ impl ProjectRepository {
         project_id: &str,
     ) -> Result<Vec<SegmentRecord>, String> {
         db.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                &format!("{} WHERE project_id = ?1 ORDER BY position ASC", SEGMENT_SELECT),
-            )?;
+            let mut stmt = conn.prepare(&format!(
+                "{} WHERE project_id = ?1 ORDER BY position ASC",
+                SEGMENT_SELECT
+            ))?;
 
             let seg_iter = stmt.query_map(params![project_id], map_segment_row)?;
 
@@ -516,8 +517,9 @@ impl ProjectRepository {
             let tx = conn.transaction()?;
 
             // Find candidate segment
-            let candidate_id: Option<String> = tx.query_row(
-                "SELECT id FROM segments
+            let candidate_id: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM segments
                  WHERE project_id = ?1
                    AND (
                        status = 'queued'
@@ -526,10 +528,10 @@ impl ProjectRepository {
                    AND cancel_requested = 0
                  ORDER BY position ASC
                  LIMIT 1",
-                params![project_id, now_ms],
-                |row| row.get(0),
-            ).optional()?;
-
+                    params![project_id, now_ms],
+                    |row| row.get(0),
+                )
+                .optional()?;
 
             if let Some(seg_id) = candidate_id {
                 let updated = tx.execute(
@@ -543,14 +545,18 @@ impl ProjectRepository {
                          state_revision = state_revision + 1,
                          updated_at = ?4
                      WHERE id = ?5 AND status IN ('queued', 'retry_wait')",
-                    params![now_ms, worker_id, lease_expires_at, Utc::now().to_rfc3339(), seg_id],
+                    params![
+                        now_ms,
+                        worker_id,
+                        lease_expires_at,
+                        Utc::now().to_rfc3339(),
+                        seg_id
+                    ],
                 )?;
 
                 if updated > 0 {
                     let seg = {
-                        let mut stmt = tx.prepare(
-                            &format!("{} WHERE id = ?1", SEGMENT_SELECT),
-                        )?;
+                        let mut stmt = tx.prepare(&format!("{} WHERE id = ?1", SEGMENT_SELECT))?;
 
                         stmt.query_row(params![seg_id], map_segment_row)?
                     };
@@ -709,13 +715,17 @@ impl ProjectRepository {
         fingerprint: &str,
     ) -> Result<(), String> {
         let now = Utc::now().to_rfc3339();
-        let old_audio_path: Option<String> = db.with_conn(|conn| {
-            conn.query_row(
-                "SELECT audio_path FROM segments WHERE id = ?1 AND project_id = ?2",
-                params![segment_id, project_id],
-                |row| row.get(0),
-            ).optional().map(|opt| opt.flatten())
-        }).unwrap_or(None);
+        let old_audio_path: Option<String> = db
+            .with_conn(|conn| {
+                conn.query_row(
+                    "SELECT audio_path FROM segments WHERE id = ?1 AND project_id = ?2",
+                    params![segment_id, project_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map(|opt| opt.flatten())
+            })
+            .unwrap_or(None);
 
         db.with_conn_mut(|conn| {
             let tx = conn.transaction()?;
@@ -1000,13 +1010,13 @@ impl ProjectRepository {
                 "SELECT audio_path FROM segments WHERE id = ?1",
                 rusqlite::params![prev_id],
                 |row| row.get(0),
-            ).optional().map_err(|e| e)?.flatten();
+            ).optional()?.flatten();
 
             let current_audio_path: Option<String> = tx.query_row(
                 "SELECT audio_path FROM segments WHERE id = ?1",
                 rusqlite::params![segment_id],
                 |row| row.get(0),
-            ).optional().map_err(|e| e)?.flatten();
+            ).optional()?.flatten();
 
             // Update previous segment with merged content
             tx.execute(
@@ -1138,7 +1148,7 @@ mod tests {
             position: 1,
             text: "Xin chào".to_string(),
             prompt: "Prompt".to_string(),
-            status: "pending".to_string(),
+            status: SegmentStatus::Pending,
             attempts: 0,
             audio_path: None,
             duration_ms: 0,
@@ -1161,8 +1171,8 @@ mod tests {
             state_revision: 1,
             output_size: 0,
             voice: None,
-            synthesis_status: Some("pending".to_string()),
-            review_status: Some("unreviewed".to_string()),
+            synthesis_status: Some(SynthesisStatus::Pending),
+            review_status: Some(ReviewStatus::Unreviewed),
             reviewed_output_fingerprint: None,
         };
 
@@ -1175,7 +1185,7 @@ mod tests {
         assert!(claimed.is_some());
         let claimed_seg = claimed.unwrap();
         assert_eq!(claimed_seg.id, "s1");
-        assert_eq!(claimed_seg.status, "processing");
+        assert_eq!(claimed_seg.status, SegmentStatus::Processing);
 
         let committed = ProjectRepository::commit_task_result(
             &db,
@@ -1194,7 +1204,7 @@ mod tests {
         assert!(committed);
 
         let final_segs = ProjectRepository::get_segments_for_project(&db, "p1").unwrap();
-        assert_eq!(final_segs[0].status, "success");
+        assert_eq!(final_segs[0].status, SegmentStatus::Success);
         assert_eq!(final_segs[0].output_fingerprint.as_deref(), Some("fp123"));
     }
 
@@ -1236,7 +1246,7 @@ mod tests {
             position: 1,
             text: "Hello World".to_string(),
             prompt: "Prompt 1".to_string(),
-            status: "success".to_string(),
+            status: SegmentStatus::Success,
             attempts: 1,
             audio_path: Some("path.wav".to_string()),
             duration_ms: 1000,
@@ -1259,8 +1269,8 @@ mod tests {
             state_revision: 1,
             output_size: 100,
             voice: None,
-            synthesis_status: Some("success".to_string()),
-            review_status: Some("unreviewed".to_string()),
+            synthesis_status: Some(SynthesisStatus::Success),
+            review_status: Some(ReviewStatus::Unreviewed),
             reviewed_output_fingerprint: None,
         };
 
@@ -1277,7 +1287,7 @@ mod tests {
         .unwrap();
         let segs = ProjectRepository::get_segments_for_project(&db, "p_test").unwrap();
         assert_eq!(segs[0].text, "Updated Text");
-        assert_eq!(segs[0].status, "pending");
+        assert_eq!(segs[0].status, SegmentStatus::Pending);
         assert!(segs[0].audio_path.is_none());
 
         // Test split segment
@@ -1342,7 +1352,7 @@ mod tests {
             position: 1,
             text: "Initial segment text".to_string(),
             prompt: "Prompt".to_string(),
-            status: "pending".to_string(),
+            status: SegmentStatus::Pending,
             attempts: 0,
             audio_path: None,
             duration_ms: 0,
@@ -1365,8 +1375,8 @@ mod tests {
             state_revision: 1,
             output_size: 0,
             voice: None,
-            synthesis_status: Some("pending".to_string()),
-            review_status: Some("unreviewed".to_string()),
+            synthesis_status: Some(SynthesisStatus::Pending),
+            review_status: Some(ReviewStatus::Unreviewed),
             reviewed_output_fingerprint: None,
         };
         ProjectRepository::insert_segments(&db, &[seg]).unwrap();
@@ -1424,7 +1434,7 @@ mod tests {
             position: 1,
             text: "Audio test segment".to_string(),
             prompt: "Prompt".to_string(),
-            status: "success".to_string(),
+            status: SegmentStatus::Success,
             attempts: 1,
             audio_path: Some(temp_file_path.to_string_lossy().to_string()),
             duration_ms: 1000,
@@ -1447,15 +1457,17 @@ mod tests {
             state_revision: 1,
             output_size: 100,
             voice: None,
-            synthesis_status: Some("success".to_string()),
-            review_status: Some("unreviewed".to_string()),
+            synthesis_status: Some(SynthesisStatus::Success),
+            review_status: Some(ReviewStatus::Unreviewed),
             reviewed_output_fingerprint: None,
         };
         ProjectRepository::insert_segments(&db, &[seg]).unwrap();
 
         ProjectRepository::delete_project(&db, "p_audio_cleanup").unwrap();
 
-        assert!(ProjectRepository::get_project(&db, "p_audio_cleanup").unwrap().is_none());
+        assert!(ProjectRepository::get_project(&db, "p_audio_cleanup")
+            .unwrap()
+            .is_none());
         assert!(!temp_file_path.exists());
     }
 
@@ -1491,7 +1503,7 @@ mod tests {
             position: 1,
             text: "Segment text".to_string(),
             prompt: "Prompt".to_string(),
-            status: "success".to_string(),
+            status: SegmentStatus::Success,
             attempts: 1,
             audio_path: Some(temp_file_path.to_string_lossy().to_string()),
             duration_ms: 1000,
@@ -1514,8 +1526,8 @@ mod tests {
             state_revision: 1,
             output_size: 100,
             voice: None,
-            synthesis_status: Some("success".to_string()),
-            review_status: Some("unreviewed".to_string()),
+            synthesis_status: Some(SynthesisStatus::Success),
+            review_status: Some(ReviewStatus::Unreviewed),
             reviewed_output_fingerprint: None,
         };
         ProjectRepository::insert_segments(&db, &[seg]).unwrap();
@@ -1556,7 +1568,7 @@ mod tests {
                 position: i,
                 text: format!("Đoạn văn bản thứ {} trong dự án lớn.", i),
                 prompt: "Đọc tự nhiên".to_string(),
-                status: "pending".to_string(),
+                status: SegmentStatus::Pending,
                 attempts: 0,
                 audio_path: None,
                 duration_ms: 500,
@@ -1579,15 +1591,16 @@ mod tests {
                 state_revision: 1,
                 output_size: 0,
                 voice: None,
-                synthesis_status: Some("pending".to_string()),
-                review_status: Some("unreviewed".to_string()),
+                synthesis_status: Some(SynthesisStatus::Pending),
+                review_status: Some(ReviewStatus::Unreviewed),
                 reviewed_output_fingerprint: None,
             });
         }
 
         ProjectRepository::insert_segments(&db, &segments).unwrap();
 
-        let fetched_segments = ProjectRepository::get_segments_for_project(&db, "p_batch_test").unwrap();
+        let fetched_segments =
+            ProjectRepository::get_segments_for_project(&db, "p_batch_test").unwrap();
         assert_eq!(fetched_segments.len(), 1200);
         assert_eq!(fetched_segments[0].position, 1);
         assert_eq!(fetched_segments[1199].position, 1200);

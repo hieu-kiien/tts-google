@@ -259,10 +259,14 @@ impl PromptBuilder {
 
 use std::sync::LazyLock;
 
-static RE_SPEAK: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)</?speak>").unwrap());
-static RE_BREAK: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r#"(?i)<break\s+time=["']([^"']+)["']\s*/?>"#).unwrap());
-static RE_EMP: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)<emphasis[^>]*>(.*?)</emphasis>").unwrap());
-static RE_PROSODY: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r#"(?i)<prosody\s+([^>]+)>(.*?)</prosody>"#).unwrap());
+static RE_SPEAK: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)</?speak>").unwrap());
+static RE_BREAK: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"(?i)<break\s+time=["']([^"']+)["']\s*/?>"#).unwrap());
+static RE_EMP: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)<emphasis[^>]*>(.*?)</emphasis>").unwrap());
+static RE_PROSODY: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"(?i)<prosody\s+([^>]+)>(.*?)</prosody>"#).unwrap());
 
 /// Parse SSML markup into Director Notes and clean Transcript text for Gemini TTS.
 pub fn parse_ssml_to_prompt(ssml_text: &str) -> (DirectorNotes, String) {
@@ -273,10 +277,14 @@ pub fn parse_ssml_to_prompt(ssml_text: &str) -> (DirectorNotes, String) {
     clean_text = RE_SPEAK.replace_all(&clean_text, "").to_string();
 
     // Process <break time="..."/> -> [Pause ...]
-    clean_text = RE_BREAK.replace_all(&clean_text, " [Pause $1] ").to_string();
+    clean_text = RE_BREAK
+        .replace_all(&clean_text, " [Pause $1] ")
+        .to_string();
 
     // Process <emphasis level="...">text</emphasis> -> [Emphasize: text]
-    clean_text = RE_EMP.replace_all(&clean_text, " [Emphasize: $1] ").to_string();
+    clean_text = RE_EMP
+        .replace_all(&clean_text, " [Emphasize: $1] ")
+        .to_string();
 
     // Process <prosody rate="..." pitch="...">text</prosody>
     for cap in RE_PROSODY.captures_iter(ssml_text) {

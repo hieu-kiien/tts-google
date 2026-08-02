@@ -4,7 +4,7 @@
   import { projectState } from "../state/projectState.svelte";
   import { toastStore } from "../state/toasts.svelte";
   import { resumeProject } from "../api/queueClient";
-  import { getErrorMessage } from "../utils/errorUtils";
+  import { getErrorMessage, parseCommandError } from "../utils/errorUtils";
 
   interface Props {
     activeErrorSegment: SegmentRecord;
@@ -12,6 +12,35 @@
   }
 
   let { activeErrorSegment, onResynthesize }: Props = $props();
+
+  let parsedError = $derived.by(() => {
+    const rawMsg = activeErrorSegment.last_error_message || activeErrorSegment.error_message || '';
+    const errCodeStr = activeErrorSegment.last_error_code || (activeErrorSegment.error_code ? String(activeErrorSegment.error_code) : '');
+    
+    if (errCodeStr === 'AUTH_INVALID' || rawMsg.includes('API Key') || rawMsg.includes('401') || rawMsg.includes('403')) {
+      return {
+        code: 'AUTH_INVALID',
+        message: rawMsg || 'API Key không hợp lệ hoặc đã bị vô hiệu hóa.',
+        retryable: false,
+      };
+    }
+    if (errCodeStr === 'DAILY_QUOTA_EXHAUSTED' || rawMsg.includes('Daily Quota')) {
+      return {
+        code: 'DAILY_QUOTA_EXHAUSTED',
+        message: rawMsg || 'Đã chạm hạn ngạch API trong ngày.',
+        retryable: false,
+      };
+    }
+    if (errCodeStr === 'RATE_LIMITED' || rawMsg.includes('429') || rawMsg.includes('Rate Limited')) {
+      return {
+        code: 'RATE_LIMITED',
+        message: rawMsg || 'Quá giới hạn tần suất gọi API (429). Hàng đợi đang tự động hoãn thử lại.',
+        retryable: true,
+      };
+    }
+    
+    return parseCommandError(rawMsg);
+  });
 
   async function handleResumeQueue() {
     if (projectState.currentProject?.id) {
@@ -29,24 +58,33 @@
   <div class="error-info">
     <span class="error-icon">⚠️</span>
     <div class="error-text">
-      <strong>Sự cố API ({activeErrorSegment.error_code || '429'}):</strong> 
-      Đoạn #{activeErrorSegment.position} {activeErrorSegment.error_message || activeErrorSegment.last_error_message || 'gặp sự cố khi kết nối Gemini API (Quá giới hạn quota hoặc API key không hợp lệ).'}
+      <strong>Lỗi [{parsedError.code}]:</strong> 
+      Đoạn #{activeErrorSegment.position} - {parsedError.message}
     </div>
   </div>
   <div class="error-actions">
-    <button class="btn-banner secondary" onclick={() => uiState.showApiKeyModal = true}>
-      🔑 Đổi API Key & Tiếp Tục
-    </button>
-    <button class="btn-banner primary" onclick={() => onResynthesize(activeErrorSegment)}>
-      🔄 Thử Lại Đoạn #{activeErrorSegment.position}
-    </button>
-    <button 
-      class="btn-banner" 
-      style="background: var(--color-success-bg); color: var(--color-success-text); border: 1px solid var(--color-success-border);" 
-      onclick={handleResumeQueue}
-    >
-      ▶ Tiếp Tục Hàng Đợi
-    </button>
+    {#if parsedError.code === 'AUTH_INVALID'}
+      <button class="btn-banner primary" onclick={() => uiState.showApiKeyModal = true}>
+        🔑 Cấu Hình Lại API Key
+      </button>
+    {:else if parsedError.code === 'DAILY_QUOTA_EXHAUSTED'}
+      <button class="btn-banner secondary" onclick={() => uiState.showApiKeyModal = true}>
+        🔑 Thêm Key Dự Phòng
+      </button>
+    {:else}
+      {#if parsedError.retryable || parsedError.code === 'RATE_LIMITED'}
+        <button class="btn-banner primary" onclick={() => onResynthesize(activeErrorSegment)}>
+          🔄 Thử Lại Đoạn #{activeErrorSegment.position}
+        </button>
+      {/if}
+      <button 
+        class="btn-banner" 
+        style="background: var(--color-success-bg); color: var(--color-success-text); border: 1px solid var(--color-success-border);" 
+        onclick={handleResumeQueue}
+      >
+        ▶ Tiếp Tục Hàng Đợi
+      </button>
+    {/if}
   </div>
 </div>
 

@@ -58,10 +58,7 @@ pub struct ProviderError {
 
 impl From<ApiError> for ProviderError {
     fn from(err: ApiError) -> Self {
-        let is_rate_limit = match err {
-            ApiError::RateLimited(_) | ApiError::RateLimitedDaily => true,
-            _ => false,
-        };
+        let is_rate_limit = matches!(err, ApiError::RateLimited(_) | ApiError::RateLimitedDaily);
         let retry_after_secs = match err {
             ApiError::RateLimited(retry_after) => retry_after,
             _ => None,

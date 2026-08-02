@@ -22,7 +22,10 @@ fn add_winlibs_to_path() {
                 env::set_var("PATH", new_path);
             }
         } else {
-            println!("cargo:warning=WINLIBS_PATH set but directory does not exist: {}", winlibs);
+            println!(
+                "cargo:warning=WINLIBS_PATH set but directory does not exist: {}",
+                winlibs
+            );
         }
     }
 }

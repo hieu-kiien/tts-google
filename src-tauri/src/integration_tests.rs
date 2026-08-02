@@ -103,13 +103,14 @@ mod tests {
 
         assert!(actual_dur > 0);
 
+        use crate::models::segment::{ReviewStatus, SegmentStatus, SynthesisStatus};
         let seg_record = SegmentRecord {
             id: "seg_001".to_string(),
             project_id: proj.id.clone(),
             position: 1,
             text: "Chương 1: Giới thiệu".to_string(),
             prompt: "Chương 1: Giới thiệu".to_string(),
-            status: "completed".to_string(),
+            status: SegmentStatus::Success,
             attempts: 1,
             audio_path: Some(wav_path1.to_str().unwrap().to_string()),
             duration_ms: 2000,
@@ -132,8 +133,8 @@ mod tests {
             state_revision: 1,
             output_size: 9600,
             voice: None,
-            synthesis_status: Some("success".to_string()),
-            review_status: Some("unreviewed".to_string()),
+            synthesis_status: Some(SynthesisStatus::Success),
+            review_status: Some(ReviewStatus::Unreviewed),
             reviewed_output_fingerprint: None,
         };
 

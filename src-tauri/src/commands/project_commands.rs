@@ -1,4 +1,6 @@
+use crate::error::{AppError, AppResult};
 use crate::models::registry::{validate_tts_model, MODEL_GEMINI_31_FLASH_TTS};
+use crate::models::segment::{ReviewStatus, SegmentStatus, SynthesisStatus};
 use crate::security::input_validation::{
     validate_chunk_mode, validate_preset, validate_project_name, validate_source_text,
     validate_voice,
@@ -22,22 +24,25 @@ pub fn create_project(
     chunk_mode: Option<String>,
     model: Option<String>,
     state: State<'_, AppState>,
-) -> Result<ProjectRecord, String> {
-    validate_project_name(&name)?;
-    validate_source_text(&source_text)?;
-    validate_voice(&voice)?;
-    validate_preset(&preset)?;
-    validate_chunk_mode(chunk_mode.as_deref())?;
+) -> AppResult<ProjectRecord> {
+    validate_project_name(&name).map_err(AppError::ValidationFailed)?;
+    validate_source_text(&source_text).map_err(AppError::ValidationFailed)?;
+    validate_voice(&voice).map_err(AppError::ValidationFailed)?;
+    validate_preset(&preset).map_err(AppError::ValidationFailed)?;
+    validate_chunk_mode(chunk_mode.as_deref()).map_err(AppError::ValidationFailed)?;
 
     let selected_model = match model {
         Some(m) if !m.trim().is_empty() => {
-            validate_tts_model(&m)?;
+            validate_tts_model(&m).map_err(AppError::ValidationFailed)?;
             m
         }
         _ => MODEL_GEMINI_31_FLASH_TTS.to_string(),
     };
 
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
     let proj_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
@@ -56,10 +61,11 @@ pub fn create_project(
         updated_at: now.clone(),
     };
 
-    ProjectRepository::create_project(db, &proj)?;
+    ProjectRepository::create_project(db, &proj).map_err(AppError::DatabaseError)?;
 
     let mode_str = chunk_mode.as_deref().unwrap_or("auto");
     let chunks = chunk_vietnamese_text_by_mode(&source_text, mode_str);
+
     let prompt_opts = PromptStyleOptions {
         style_preset: preset,
         pacing: "Bình thường".to_string(),
@@ -85,7 +91,7 @@ pub fn create_project(
                 position: c.position as usize,
                 text: c.text.clone(),
                 prompt: build_tts_prompt(&c.text, &prompt_opts),
-                status: "pending".to_string(),
+                status: SegmentStatus::Pending,
                 attempts: 0,
                 audio_path: None,
                 duration_ms: c.estimated_duration_ms as u64,
@@ -108,36 +114,45 @@ pub fn create_project(
                 state_revision: 1,
                 output_size: 0,
                 voice: None,
-                synthesis_status: Some("pending".to_string()),
-                review_status: Some("unreviewed".to_string()),
+                synthesis_status: Some(SynthesisStatus::Pending),
+                review_status: Some(ReviewStatus::Unreviewed),
                 reviewed_output_fingerprint: None,
             }
         })
         .collect();
 
-    ProjectRepository::insert_segments(db, &segments)?;
+    ProjectRepository::insert_segments(db, &segments).map_err(AppError::DatabaseError)?;
     Ok(proj)
 }
 
 #[tauri::command]
-pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectRecord>, String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    ProjectRepository::list_projects(db)
+pub fn list_projects(state: State<'_, AppState>) -> AppResult<Vec<ProjectRecord>> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
+    ProjectRepository::list_projects(db).map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
-pub fn delete_project(project_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    ProjectRepository::delete_project(db, &project_id)
+pub fn delete_project(project_id: String, state: State<'_, AppState>) -> AppResult<()> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
+    ProjectRepository::delete_project(db, &project_id).map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
 pub fn delete_projects_batch(
     project_ids: Vec<String>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    ProjectRepository::delete_projects_batch(db, &project_ids)
+) -> AppResult<()> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
+    ProjectRepository::delete_projects_batch(db, &project_ids).map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
@@ -145,9 +160,12 @@ pub fn delete_segment(
     project_id: String,
     segment_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    ProjectRepository::delete_segment(db, &project_id, &segment_id)
+) -> AppResult<()> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
+    ProjectRepository::delete_segment(db, &project_id, &segment_id).map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
@@ -155,9 +173,13 @@ pub fn delete_segments_batch(
     project_id: String,
     segment_ids: Vec<String>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
+) -> AppResult<()> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
     ProjectRepository::delete_segments_batch(db, &project_id, &segment_ids)
+        .map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
@@ -166,9 +188,13 @@ pub fn insert_segment_at(
     position: usize,
     text: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
+) -> AppResult<()> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
     ProjectRepository::insert_segment_at(db, &project_id, position, &text)
+        .map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
@@ -177,22 +203,29 @@ pub fn move_segment(
     segment_id: String,
     direction: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
+) -> AppResult<()> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
     ProjectRepository::swap_segment_positions(db, &project_id, &segment_id, &direction)
+        .map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
 pub fn get_project_segments(
     project_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<SegmentRecord>, String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    ProjectRepository::get_segments_for_project(db, &project_id)
+) -> AppResult<Vec<SegmentRecord>> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
+    ProjectRepository::get_segments_for_project(db, &project_id).map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
-pub fn normalize_vietnamese_text(text: String) -> Result<String, String> {
+pub fn normalize_vietnamese_text(text: String) -> AppResult<String> {
     Ok(crate::text::normalizer::VietnameseNormalizer::normalize(
         &text,
     ))
@@ -204,11 +237,15 @@ pub fn update_segment_text(
     project_id: String,
     segment_id: String,
     text: String,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let state = app.state::<AppState>();
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
 
-    let proj = ProjectRepository::get_project_by_id(db, &project_id)?;
+    let proj =
+        ProjectRepository::get_project_by_id(db, &project_id).map_err(AppError::DatabaseError)?;
     let (voice, preset, model) = proj
         .map(|p| (p.voice, p.preset, p.model))
         .unwrap_or_else(|| {
@@ -236,6 +273,7 @@ pub fn update_segment_text(
     });
 
     SegmentRepository::update_text(db, &project_id, &segment_id, &text, &prompt, &fp)
+        .map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
@@ -243,10 +281,13 @@ pub fn update_project_voice(
     app: tauri::AppHandle,
     project_id: String,
     voice_id: String,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let state = app.state::<AppState>();
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    ProjectRepository::update_voice(db, &project_id, &voice_id)
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
+    ProjectRepository::update_voice(db, &project_id, &voice_id).map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
@@ -255,10 +296,14 @@ pub fn split_segment(
     project_id: String,
     segment_id: String,
     split_index: usize,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let state = app.state::<AppState>();
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
     SegmentRepository::split_segment(db, &project_id, &segment_id, split_index)
+        .map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
@@ -266,19 +311,23 @@ pub fn merge_segments(
     app: tauri::AppHandle,
     project_id: String,
     segment_id: String,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let state = app.state::<AppState>();
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
     SegmentRepository::merge_with_previous(db, &project_id, &segment_id)
+        .map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
 pub fn chunk_text_preview(
     text: String,
     mode: Option<String>,
-) -> Result<Vec<crate::text::chunker::TextChunk>, String> {
-    validate_source_text(&text)?;
-    validate_chunk_mode(mode.as_deref())?;
+) -> AppResult<Vec<crate::text::chunker::TextChunk>> {
+    validate_source_text(&text).map_err(AppError::ValidationFailed)?;
+    validate_chunk_mode(mode.as_deref()).map_err(AppError::ValidationFailed)?;
     let mode_str = mode.as_deref().unwrap_or("auto");
     Ok(crate::text::chunker::chunk_vietnamese_text_by_mode(
         &text, mode_str,
@@ -291,13 +340,17 @@ pub fn rechunk_project_segments(
     project_id: String,
     source_text: String,
     mode: Option<String>,
-) -> Result<Vec<SegmentRecord>, String> {
-    validate_source_text(&source_text)?;
-    validate_chunk_mode(mode.as_deref())?;
+) -> AppResult<Vec<SegmentRecord>> {
+    validate_source_text(&source_text).map_err(AppError::ValidationFailed)?;
+    validate_chunk_mode(mode.as_deref()).map_err(AppError::ValidationFailed)?;
 
     let state = app.state::<AppState>();
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    let proj = ProjectRepository::get_project_by_id(db, &project_id)?;
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
+    let proj =
+        ProjectRepository::get_project_by_id(db, &project_id).map_err(AppError::DatabaseError)?;
     let (voice, preset, model) = proj
         .map(|p| (p.voice, p.preset, p.model))
         .unwrap_or_else(|| {
@@ -311,8 +364,10 @@ pub fn rechunk_project_segments(
     let mode_str = mode.as_deref().unwrap_or("auto");
     let chunks = crate::text::chunker::chunk_vietnamese_text_by_mode(&source_text, mode_str);
 
-    ProjectRepository::update_source_text(db, &project_id, &source_text)?;
-    ProjectRepository::delete_segments_for_project(db, &project_id)?;
+    ProjectRepository::update_source_text(db, &project_id, &source_text)
+        .map_err(AppError::DatabaseError)?;
+    ProjectRepository::delete_segments_for_project(db, &project_id)
+        .map_err(AppError::DatabaseError)?;
 
     let now = Utc::now().to_rfc3339();
     let prompt_opts = PromptStyleOptions {
@@ -340,7 +395,7 @@ pub fn rechunk_project_segments(
                 position: c.position as usize,
                 text: c.text.clone(),
                 prompt: build_tts_prompt(&c.text, &prompt_opts),
-                status: "pending".to_string(),
+                status: SegmentStatus::Pending,
                 attempts: 0,
                 audio_path: None,
                 duration_ms: c.estimated_duration_ms as u64,
@@ -363,15 +418,15 @@ pub fn rechunk_project_segments(
                 state_revision: 1,
                 output_size: 0,
                 voice: None,
-                synthesis_status: Some("pending".to_string()),
-                review_status: Some("unreviewed".to_string()),
+                synthesis_status: Some(SynthesisStatus::Pending),
+                review_status: Some(ReviewStatus::Unreviewed),
                 reviewed_output_fingerprint: None,
             }
         })
         .collect();
 
-    ProjectRepository::insert_segments(db, &segments)?;
-    ProjectRepository::get_segments_for_project(db, &project_id)
+    ProjectRepository::insert_segments(db, &segments).map_err(AppError::DatabaseError)?;
+    ProjectRepository::get_segments_for_project(db, &project_id).map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
@@ -380,9 +435,13 @@ pub fn update_segment_voice(
     segment_id: String,
     voice: Option<String>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
+) -> AppResult<()> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
     ProjectRepository::update_segment_voice(db, &project_id, &segment_id, voice.as_deref())
+        .map_err(AppError::DatabaseError)
 }
 
 #[tauri::command]
@@ -391,12 +450,16 @@ pub fn update_segment_review_status(
     review_status: String,
     reviewed_output_fingerprint: Option<String>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
+) -> AppResult<()> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
     ProjectRepository::update_segment_review_status(
         db,
         &segment_id,
         &review_status,
         reviewed_output_fingerprint.as_deref(),
     )
+    .map_err(AppError::DatabaseError)
 }

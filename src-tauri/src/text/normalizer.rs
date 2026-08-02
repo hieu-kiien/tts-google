@@ -1,6 +1,6 @@
 use regex::Regex;
-use tracing::info;
 use std::sync::LazyLock;
+use tracing::info;
 
 static ABBR_REGEXES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     vec![
@@ -25,31 +25,64 @@ static ABBR_REGEXES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
 
 static UNIT_REGEXES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     vec![
-        (Regex::new(r"(\d+(?:[\.,]\d+)?)\s*km/h").unwrap(), "$1 ki-lô-mét trên giờ"),
-        (Regex::new(r"(\d+(?:[\.,]\d+)?)\s*m/s").unwrap(), "$1 mét trên giây"),
-        (Regex::new(r"(?i)(\d+(?:[\.,]\d+)?)\s*[^\w\s]?\s*C\b").unwrap(), "$1 độ C"),
-        (Regex::new(r"(\d+(?:[\.,]\d+)?)\s*cm\b").unwrap(), "$1 xen-ti-mét"),
-        (Regex::new(r"(\d+(?:[\.,]\d+)?)\s*mm\b").unwrap(), "$1 mi-li-mét"),
-        (Regex::new(r"(\d+(?:[\.,]\d+)?)\s*kg\b").unwrap(), "$1 ki-lô-gam"),
+        (
+            Regex::new(r"(\d+(?:[\.,]\d+)?)\s*km/h").unwrap(),
+            "$1 ki-lô-mét trên giờ",
+        ),
+        (
+            Regex::new(r"(\d+(?:[\.,]\d+)?)\s*m/s").unwrap(),
+            "$1 mét trên giây",
+        ),
+        (
+            Regex::new(r"(?i)(\d+(?:[\.,]\d+)?)\s*[^\w\s]?\s*C\b").unwrap(),
+            "$1 độ C",
+        ),
+        (
+            Regex::new(r"(\d+(?:[\.,]\d+)?)\s*cm\b").unwrap(),
+            "$1 xen-ti-mét",
+        ),
+        (
+            Regex::new(r"(\d+(?:[\.,]\d+)?)\s*mm\b").unwrap(),
+            "$1 mi-li-mét",
+        ),
+        (
+            Regex::new(r"(\d+(?:[\.,]\d+)?)\s*kg\b").unwrap(),
+            "$1 ki-lô-gam",
+        ),
         (Regex::new(r"(\d+(?:[\.,]\d+)?)\s*g\b").unwrap(), "$1 gam"),
-        (Regex::new(r"(\d+(?:[\.,]\d+)?)\s*m²").unwrap(), "$1 mét vuông"),
-        (Regex::new(r"(\d+(?:[\.,]\d+)?)\s*m³").unwrap(), "$1 mét khối"),
+        (
+            Regex::new(r"(\d+(?:[\.,]\d+)?)\s*m²").unwrap(),
+            "$1 mét vuông",
+        ),
+        (
+            Regex::new(r"(\d+(?:[\.,]\d+)?)\s*m³").unwrap(),
+            "$1 mét khối",
+        ),
     ]
 });
 
-static CURRENCY_VND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+(?:[\.,]\d+)*)\s*(?:VND|VNĐ|\bđ\b|đồng\b)").unwrap());
-static CURRENCY_USD_1: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\s*(\d+(?:[\.,]\d+)*)").unwrap());
-static CURRENCY_USD_2: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+(?:[\.,]\d+)*)\s*USD").unwrap());
-static CURRENCY_EUR_1: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"€\s*(\d+(?:[\.,]\d+)*)").unwrap());
-static CURRENCY_EUR_2: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+(?:[\.,]\d+)*)\s*EUR").unwrap());
+static CURRENCY_VND: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d+(?:[\.,]\d+)*)\s*(?:VND|VNĐ|\bđ\b|đồng\b)").unwrap());
+static CURRENCY_USD_1: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\s*(\d+(?:[\.,]\d+)*)").unwrap());
+static CURRENCY_USD_2: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d+(?:[\.,]\d+)*)\s*USD").unwrap());
+static CURRENCY_EUR_1: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"€\s*(\d+(?:[\.,]\d+)*)").unwrap());
+static CURRENCY_EUR_2: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d+(?:[\.,]\d+)*)\s*EUR").unwrap());
 
-static DATE_1: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b").unwrap());
-static DATE_2: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\btháng\s*(\d{1,2})[/.-](\d{4})\b").unwrap());
+static DATE_1: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b").unwrap());
+static DATE_2: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\btháng\s*(\d{1,2})[/.-](\d{4})\b").unwrap());
 
-static TIME_1: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\d{1,2})h(\d{1,2})p?\b").unwrap());
+static TIME_1: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(\d{1,2})h(\d{1,2})p?\b").unwrap());
 static TIME_2: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\d{1,2})h\b").unwrap());
 
-static PERCENTAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+(?:[\.,]\d+)?)\s*%").unwrap());
+static PERCENTAGE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d+(?:[\.,]\d+)?)\s*%").unwrap());
 
 static ROMAN_REGEXES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     vec![
@@ -126,7 +159,9 @@ impl VietnameseNormalizer {
 
     fn normalize_currencies(text: &str) -> String {
         let mut res = text.to_string();
-        res = CURRENCY_VND.replace_all(&res, "$1 Việt Nam đồng").to_string();
+        res = CURRENCY_VND
+            .replace_all(&res, "$1 Việt Nam đồng")
+            .to_string();
         res = CURRENCY_USD_1.replace_all(&res, "$1 đô la Mỹ").to_string();
         res = CURRENCY_USD_2.replace_all(&res, "$1 đô la Mỹ").to_string();
         res = CURRENCY_EUR_1.replace_all(&res, "$1 ơ-rô").to_string();
@@ -136,7 +171,9 @@ impl VietnameseNormalizer {
 
     fn normalize_dates(text: &str) -> String {
         let mut res = text.to_string();
-        res = DATE_1.replace_all(&res, "ngày $1 tháng $2 năm $3").to_string();
+        res = DATE_1
+            .replace_all(&res, "ngày $1 tháng $2 năm $3")
+            .to_string();
         res = DATE_2.replace_all(&res, "tháng $1 năm $2").to_string();
         res
     }

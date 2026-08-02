@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+pub type AppResult<T> = Result<T, AppError>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppErrorResponse {
     pub code: &'static str,
@@ -33,6 +35,12 @@ pub enum AppError {
     AudioCorrupt(String),
 
     #[error("{0}")]
+    FileSystem(String),
+
+    #[error("{0}")]
+    Queue(String),
+
+    #[error("{0}")]
     InternalError(String),
 }
 
@@ -46,12 +54,17 @@ impl AppError {
             Self::ValidationFailed(_) => "VALIDATION_FAILED",
             Self::DatabaseError(_) => "DATABASE_ERROR",
             Self::AudioCorrupt(_) => "AUDIO_CORRUPT",
+            Self::FileSystem(_) => "FILE_SYSTEM_ERROR",
+            Self::Queue(_) => "QUEUE_ERROR",
             Self::InternalError(_) => "INTERNAL_ERROR",
         }
     }
 
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::RateLimited(_) | Self::NetworkUnavailable(_))
+        matches!(
+            self,
+            Self::RateLimited(_) | Self::NetworkUnavailable(_) | Self::Queue(_)
+        )
     }
 
     pub fn message(&self) -> String {
@@ -63,6 +76,8 @@ impl AppError {
             Self::ValidationFailed(msg) => msg.clone(),
             Self::DatabaseError(msg) => msg.clone(),
             Self::AudioCorrupt(msg) => msg.clone(),
+            Self::FileSystem(msg) => msg.clone(),
+            Self::Queue(msg) => msg.clone(),
             Self::InternalError(msg) => msg.clone(),
         }
     }
@@ -102,18 +117,25 @@ impl From<&str> for AppError {
 impl From<crate::api::interactions_client::ApiError> for AppError {
     fn from(e: crate::api::interactions_client::ApiError) -> Self {
         match e {
-            crate::api::interactions_client::ApiError::Unauthorized => {
-                AppError::AuthInvalid("API Key Gemini không hợp lệ hoặc thiếu quyền truy cập.".to_string())
-            }
+            crate::api::interactions_client::ApiError::Unauthorized => AppError::AuthInvalid(
+                "API Key Gemini không hợp lệ hoặc thiếu quyền truy cập.".to_string(),
+            ),
             crate::api::interactions_client::ApiError::NetworkError(msg) => {
                 AppError::NetworkUnavailable(format!("Lỗi kết nối mạng: {}", msg))
             }
             crate::api::interactions_client::ApiError::RateLimited(secs) => {
-                let wait_str = secs.map(|s| s.to_string()).unwrap_or_else(|| "15".to_string());
-                AppError::RateLimited(format!("Vượt quá tần suất yêu cầu API (429). Vui lòng thử lại sau {} giây.", wait_str))
+                let wait_str = secs
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "15".to_string());
+                AppError::RateLimited(format!(
+                    "Vượt quá tần suất yêu cầu API (429). Vui lòng thử lại sau {} giây.",
+                    wait_str
+                ))
             }
             crate::api::interactions_client::ApiError::RateLimitedDaily => {
-                AppError::DailyQuotaExhausted("Đã chạm hạn ngạch API trong ngày (Daily Quota Exhausted).".to_string())
+                AppError::DailyQuotaExhausted(
+                    "Đã chạm hạn ngạch API trong ngày (Daily Quota Exhausted).".to_string(),
+                )
             }
             _ => AppError::InternalError(e.to_string()),
         }

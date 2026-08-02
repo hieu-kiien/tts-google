@@ -1,3 +1,4 @@
+use crate::error::{AppError, AppResult};
 use rfd::FileDialog;
 use serde::Serialize;
 
@@ -8,7 +9,7 @@ pub struct TextFileContent {
 }
 
 #[tauri::command]
-pub fn pick_output_folder() -> Result<Option<String>, String> {
+pub fn pick_output_folder() -> AppResult<Option<String>> {
     let folder = FileDialog::new()
         .set_title("Chọn Thư Mục Lưu File Audio Master")
         .pick_folder();
@@ -20,7 +21,7 @@ pub fn pick_output_folder() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub fn save_master_wav_dialog(default_filename: Option<String>) -> Result<Option<String>, String> {
+pub fn save_master_wav_dialog(default_filename: Option<String>) -> AppResult<Option<String>> {
     let default_name = default_filename.unwrap_or_else(|| "TTS_Master_Audio.wav".to_string());
 
     let file = FileDialog::new()
@@ -36,7 +37,7 @@ pub fn save_master_wav_dialog(default_filename: Option<String>) -> Result<Option
 }
 
 #[tauri::command]
-pub fn save_srt_file_dialog(default_filename: Option<String>) -> Result<Option<String>, String> {
+pub fn save_srt_file_dialog(default_filename: Option<String>) -> AppResult<Option<String>> {
     let default_name = default_filename.unwrap_or_else(|| "TTS_Subtitle.srt".to_string());
 
     let file = FileDialog::new()
@@ -52,7 +53,7 @@ pub fn save_srt_file_dialog(default_filename: Option<String>) -> Result<Option<S
 }
 
 #[tauri::command]
-pub fn save_vtt_file_dialog(default_filename: Option<String>) -> Result<Option<String>, String> {
+pub fn save_vtt_file_dialog(default_filename: Option<String>) -> AppResult<Option<String>> {
     let default_name = default_filename.unwrap_or_else(|| "TTS_Subtitle.vtt".to_string());
 
     let file = FileDialog::new()
@@ -68,9 +69,7 @@ pub fn save_vtt_file_dialog(default_filename: Option<String>) -> Result<Option<S
 }
 
 #[tauri::command]
-pub fn save_segment_audio_dialog(
-    default_filename: Option<String>,
-) -> Result<Option<String>, String> {
+pub fn save_segment_audio_dialog(default_filename: Option<String>) -> AppResult<Option<String>> {
     let default_name = default_filename.unwrap_or_else(|| "Segment_Audio.wav".to_string());
 
     let file = FileDialog::new()
@@ -86,7 +85,7 @@ pub fn save_segment_audio_dialog(
 }
 
 #[tauri::command]
-pub fn read_text_file_dialog() -> Result<Option<TextFileContent>, String> {
+pub fn read_text_file_dialog() -> AppResult<Option<TextFileContent>> {
     let file = FileDialog::new()
         .set_title("Chọn File Tài Liệu Văn Bản (TXT, MD)")
         .add_filter("Tài Liệu Văn Bản (*.txt, *.md)", &["txt", "md"])
@@ -94,7 +93,8 @@ pub fn read_text_file_dialog() -> Result<Option<TextFileContent>, String> {
 
     match file {
         Some(path) => {
-            let content = crate::text::file_parser::DocumentParser::parse_file(&path)?;
+            let content = crate::text::file_parser::DocumentParser::parse_file(&path)
+                .map_err(AppError::FileSystem)?;
             Ok(Some(TextFileContent {
                 file_path: path.to_string_lossy().to_string(),
                 content,

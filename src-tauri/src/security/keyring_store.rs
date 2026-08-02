@@ -61,11 +61,11 @@ impl CredentialStore {
             if let Ok(json) = entry.get_password() {
                 if let Ok(keys) = serde_json::from_str::<Vec<String>>(&json) {
                     let mut inner = store.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("KeyringStore Mutex poisoned, recovering");
-            let mut recovered = poisoned.into_inner();
-            recovered.key_pool.retain(|slot| !slot.key.is_empty());
-            recovered
-        });
+                        tracing::warn!("KeyringStore Mutex poisoned, recovering");
+                        let mut recovered = poisoned.into_inner();
+                        recovered.key_pool.retain(|slot| !slot.key.is_empty());
+                        recovered
+                    });
                     for k in keys {
                         if !k.trim().is_empty() {
                             inner.key_pool.push(KeySlot {
@@ -189,7 +189,7 @@ impl CredentialStore {
             recovered.key_pool.retain(|slot| !slot.key.is_empty());
             recovered
         });
-        
+
         let old_pool = std::mem::take(&mut inner.key_pool);
 
         let mut count = 0;
@@ -260,12 +260,16 @@ impl CredentialStore {
 
     /// Get count of configured keys.
     pub fn key_count(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("KeyringStore Mutex poisoned, recovering");
-            let mut recovered = poisoned.into_inner();
-            recovered.key_pool.retain(|slot| !slot.key.is_empty());
-            recovered
-        }).key_pool.len()
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("KeyringStore Mutex poisoned, recovering");
+                let mut recovered = poisoned.into_inner();
+                recovered.key_pool.retain(|slot| !slot.key.is_empty());
+                recovered
+            })
+            .key_pool
+            .len()
     }
 
     /// Remove a key by index.

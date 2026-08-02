@@ -138,13 +138,17 @@ mod tests {
 
     #[test]
     fn test_compute_fingerprint_v2_canonical() {
-        let mut fp_input1 = SegmentFingerprintV2::default();
-        fp_input1.final_spoken_text = "Nội dung chuẩn hóa".to_string();
-        fp_input1.voice_id = "Kore".to_string();
+        let fp_input1 = SegmentFingerprintV2 {
+            final_spoken_text: "Nội dung chuẩn hóa".to_string(),
+            voice_id: "Kore".to_string(),
+            ..Default::default()
+        };
 
-        let mut fp_input2 = SegmentFingerprintV2::default();
-        fp_input2.final_spoken_text = "Nội dung chuẩn hóa".to_string();
-        fp_input2.voice_id = "Kore".to_string();
+        let fp_input2 = SegmentFingerprintV2 {
+            final_spoken_text: "Nội dung chuẩn hóa".to_string(),
+            voice_id: "Kore".to_string(),
+            ..Default::default()
+        };
 
         let fp1 = compute_segment_fingerprint_v2(&fp_input1);
         let fp2 = compute_segment_fingerprint_v2(&fp_input2);

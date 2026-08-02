@@ -1,4 +1,6 @@
 use crate::audio::wav_merger::merge_wav_files;
+use crate::error::{AppError, AppResult};
+use crate::models::segment::SegmentStatus;
 use crate::security::path_policy::{
     resolve_existing_read_target, resolve_export_target, resolve_write_target,
     validate_base64_payload_size,
@@ -31,25 +33,38 @@ pub fn merge_project_audio(
     silence_gap_ms: u64,
     custom_output_path: Option<String>,
     state: State<'_, AppState>,
-) -> Result<MergeResult, String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    let segments = ProjectRepository::get_segments_for_project(db, &project_id)?;
+) -> AppResult<MergeResult> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
+    let segments = ProjectRepository::get_segments_for_project(db, &project_id)
+        .map_err(AppError::DatabaseError)?;
 
     let total_count = segments.len();
-    let failed_count = segments.iter().filter(|s| s.status == "failed").count();
+    let failed_count = segments
+        .iter()
+        .filter(|s| s.status == SegmentStatus::Failed)
+        .count();
     let pending_count = segments
         .iter()
-        .filter(|s| s.status == "pending" || s.status == "queued" || s.status == "processing")
+        .filter(|s| {
+            s.status == SegmentStatus::Pending
+                || s.status == SegmentStatus::Queued
+                || s.status == SegmentStatus::Processing
+        })
         .count();
 
     let valid_audio_paths: Vec<String> = segments
         .iter()
-        .filter(|s| s.status == "success")
+        .filter(|s| s.status == SegmentStatus::Success || s.status == SegmentStatus::Approved)
         .filter_map(|s| s.audio_path.clone())
         .collect();
 
     if valid_audio_paths.is_empty() {
-        return Err("Không có đoạn audio nào đã tạo thành công để ghép file".to_string());
+        return Err(AppError::ValidationFailed(
+            "Không có đoạn audio nào đã tạo thành công để ghép file".to_string(),
+        ));
     }
 
     let warning = if failed_count > 0 || pending_count > 0 {
@@ -58,317 +73,163 @@ pub fn merge_project_audio(
         None
     };
 
-    let is_user_path = custom_output_path.as_ref().map_or(false, |p| !p.trim().is_empty());
-    let raw_master_path = match custom_output_path {
-        Some(p) if !p.trim().is_empty() => p,
-        _ => state
-            .output_dir
-            .join(format!("master_{}.wav", project_id))
-            .to_string_lossy()
-            .to_string(),
+    let proj =
+        ProjectRepository::get_project_by_id(db, &project_id).map_err(AppError::DatabaseError)?;
+    let proj_name = proj
+        .map(|p| p.name)
+        .unwrap_or_else(|| "audiobook".to_string());
+    let safe_name = proj_name.replace(|c: char| !c.is_alphanumeric(), "_");
+
+    let target_path = match custom_output_path {
+        Some(path_str) if !path_str.trim().is_empty() => {
+            resolve_write_target(&[state.output_dir.as_path()], &path_str, &["wav"])
+                .map_err(AppError::FileSystem)?
+        }
+        _ => {
+            let filename = format!("{}_master.wav", safe_name);
+            let default_path = state.output_dir.join(filename);
+            resolve_write_target(
+                &[state.output_dir.as_path()],
+                default_path.to_str().unwrap(),
+                &["wav"],
+            )
+            .map_err(AppError::FileSystem)?
+        }
     };
 
-    // User-selected paths (from save dialog) use relaxed export policy;
-    // Default app paths use strict write policy with allowed_roots
-    let master_path = if is_user_path {
-        resolve_export_target(&raw_master_path, &["wav"])?
-    } else {
-        resolve_write_target(&state.get_allowed_roots(), &raw_master_path, &["wav"])?
-    };
-    let master_path_str = master_path.to_string_lossy().to_string();
-
-    let total_duration_ms = merge_wav_files(&valid_audio_paths, &master_path_str, silence_gap_ms)?;
+    let total_duration_ms = merge_wav_files(
+        &valid_audio_paths,
+        target_path.to_str().unwrap(),
+        silence_gap_ms,
+    )
+    .map_err(AppError::AudioCorrupt)?;
 
     Ok(MergeResult {
-        output_path: master_path_str,
+        output_path: target_path.to_string_lossy().to_string(),
         total_duration_ms,
         warning,
     })
 }
 
 #[tauri::command]
-pub fn export_project_srt(
+pub fn export_project_subtitles(
     project_id: String,
+    format_type: String, // "srt" | "vtt" | "lrc"
     silence_gap_ms: u64,
     custom_output_path: Option<String>,
     state: State<'_, AppState>,
-) -> Result<SubtitleExportResult, String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    let segments = ProjectRepository::get_segments_for_project(db, &project_id)?;
+) -> AppResult<SubtitleExportResult> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
+    let segments = ProjectRepository::get_segments_for_project(db, &project_id)
+        .map_err(AppError::DatabaseError)?;
 
     if segments.is_empty() {
-        return Err("Dự án không có segment nào để xuất phụ đề".to_string());
+        return Err(AppError::ValidationFailed(
+            "Dự án không có segment nào để xuất phụ đề.".to_string(),
+        ));
     }
 
-    let srt_content = generate_srt_subtitles(&segments, silence_gap_ms);
-
-    let is_user_path = custom_output_path.as_ref().map_or(false, |p| !p.trim().is_empty());
-    let raw_output_path = match custom_output_path {
-        Some(p) if !p.trim().is_empty() => p,
-        _ => state
-            .output_dir
-            .join(format!("subtitle_{}.srt", project_id))
-            .to_string_lossy()
-            .to_string(),
+    let fmt_lower = format_type.to_lowercase();
+    let ext = match fmt_lower.as_str() {
+        "vtt" => "vtt",
+        "lrc" => "lrc",
+        _ => "srt",
     };
 
-    let output_path = if is_user_path {
-        resolve_export_target(&raw_output_path, &["srt"])?
-    } else {
-        resolve_write_target(&state.get_allowed_roots(), &raw_output_path, &["srt"])?
+    let content = match ext {
+        "vtt" => generate_vtt_subtitles(&segments, silence_gap_ms),
+        "lrc" => crate::text::lrc_exporter::generate_lrc_subtitles(&segments, silence_gap_ms),
+        _ => generate_srt_subtitles(&segments, silence_gap_ms),
     };
-    let output_path_str = output_path.to_string_lossy().to_string();
 
-    fs::write(&output_path, &srt_content).map_err(|e| {
-        format!(
-            "Không thể ghi file phụ đề SRT tại {}: {}",
-            output_path_str, e
-        )
-    })?;
+    let proj =
+        ProjectRepository::get_project_by_id(db, &project_id).map_err(AppError::DatabaseError)?;
+    let proj_name = proj
+        .map(|p| p.name)
+        .unwrap_or_else(|| "subtitles".to_string());
+    let safe_name = proj_name.replace(|c: char| !c.is_alphanumeric(), "_");
+
+    let target_path = match custom_output_path {
+        Some(path_str) if !path_str.trim().is_empty() => {
+            resolve_export_target(&path_str, &[ext]).map_err(AppError::FileSystem)?
+        }
+        _ => {
+            let filename = format!("{}.{}", safe_name, ext);
+            let default_path = state.output_dir.join(filename);
+            resolve_export_target(default_path.to_str().unwrap(), &[ext])
+                .map_err(AppError::FileSystem)?
+        }
+    };
+
+    fs::write(&target_path, &content)
+        .map_err(|e| AppError::FileSystem(format!("Không thể ghi file phụ đề: {}", e)))?;
 
     Ok(SubtitleExportResult {
-        output_path: output_path_str,
-        content: srt_content,
-    })
-}
-
-#[tauri::command]
-pub fn export_project_vtt(
-    project_id: String,
-    silence_gap_ms: u64,
-    custom_output_path: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<SubtitleExportResult, String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    let segments = ProjectRepository::get_segments_for_project(db, &project_id)?;
-
-    if segments.is_empty() {
-        return Err("Dự án không có segment nào để xuất phụ đề VTT".to_string());
-    }
-
-    let vtt_content = generate_vtt_subtitles(&segments, silence_gap_ms);
-
-    let is_user_path = custom_output_path.as_ref().map_or(false, |p| !p.trim().is_empty());
-    let raw_output_path = match custom_output_path {
-        Some(p) if !p.trim().is_empty() => p,
-        _ => state
-            .output_dir
-            .join(format!("subtitle_{}.vtt", project_id))
-            .to_string_lossy()
-            .to_string(),
-    };
-
-    let output_path = if is_user_path {
-        resolve_export_target(&raw_output_path, &["vtt"])?
-    } else {
-        resolve_write_target(&state.get_allowed_roots(), &raw_output_path, &["vtt"])?
-    };
-    let output_path_str = output_path.to_string_lossy().to_string();
-
-    fs::write(&output_path, &vtt_content).map_err(|e| {
-        format!(
-            "Không thể ghi file phụ đề VTT tại {}: {}",
-            output_path_str, e
-        )
-    })?;
-
-    Ok(SubtitleExportResult {
-        output_path: output_path_str,
-        content: vtt_content,
-    })
-}
-
-#[tauri::command]
-pub fn export_project_lrc(
-    project_id: String,
-    silence_gap_ms: u64,
-    custom_output_path: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<SubtitleExportResult, String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    let segments = ProjectRepository::get_segments_for_project(db, &project_id)?;
-
-    if segments.is_empty() {
-        return Err("Dự án không có segment nào để xuất phụ đề LRC".to_string());
-    }
-
-    let mut current_time = 0u64;
-    let lrc_segs: Vec<crate::text::lrc_exporter::LrcSegment> = segments
-        .iter()
-        .map(|s| {
-            let seg = crate::text::lrc_exporter::LrcSegment {
-                start_ms: current_time,
-                text: s.text.clone(),
-            };
-            current_time += s.duration_ms + silence_gap_ms;
-            seg
-        })
-        .collect();
-
-    let is_user_path = custom_output_path.as_ref().map_or(false, |p| !p.trim().is_empty());
-    let raw_output_path = match custom_output_path {
-        Some(p) if !p.trim().is_empty() => p,
-        _ => state
-            .output_dir
-            .join(format!("subtitle_{}.lrc", project_id))
-            .to_string_lossy()
-            .to_string(),
-    };
-
-    let output_path = if is_user_path {
-        resolve_export_target(&raw_output_path, &["lrc"])?
-    } else {
-        resolve_write_target(&state.get_allowed_roots(), &raw_output_path, &["lrc"])?
-    };
-    let output_path_str = output_path.to_string_lossy().to_string();
-
-    let exported_path = crate::text::lrc_exporter::LrcExporter::export_lrc(
-        &lrc_segs,
-        "Auto TTS Project",
-        "Gemini TTS Reader",
-        &output_path_str,
-    )?;
-
-    let content = fs::read_to_string(&exported_path).unwrap_or_default();
-
-    Ok(SubtitleExportResult {
-        output_path: exported_path,
+        output_path: target_path.to_string_lossy().to_string(),
         content,
     })
 }
 
 #[tauri::command]
-pub fn export_project_m4b_manifest(
-    project_id: String,
-    silence_gap_ms: u64,
-    custom_output_path: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<SubtitleExportResult, String> {
-    let db = state.db.as_ref().ok_or("Database not initialized")?;
-    let segments = ProjectRepository::get_segments_for_project(db, &project_id)?;
-
-    if segments.is_empty() {
-        return Err("Dự án không có segment nào để xuất Audiobook Manifest".to_string());
-    }
-
-    let mut current_time = 0u64;
-    let chapters: Vec<crate::audio::m4b_exporter::ChapterMarker> = segments
-        .iter()
-        .enumerate()
-        .map(|(idx, s)| {
-            let marker = crate::audio::m4b_exporter::ChapterMarker {
-                chapter_number: idx + 1,
-                title: format!("Segment #{}", s.position),
-                start_time_ms: current_time,
-                duration_ms: s.duration_ms,
-            };
-            current_time += s.duration_ms + silence_gap_ms;
-            marker
-        })
-        .collect();
-
-    let manifest = crate::audio::m4b_exporter::AudiobookManifest {
-        title: format!("Audiobook Project {}", project_id),
-        author: "Tác giả".to_string(),
-        narrator: "Gemini Free Tier Studio".to_string(),
-        publisher: "Auto TTS Desktop".to_string(),
-        total_duration_ms: current_time,
-        chapters,
-    };
-
-    let is_user_path = custom_output_path.as_ref().map_or(false, |p| !p.trim().is_empty());
-    let raw_output_path = match custom_output_path {
-        Some(p) if !p.trim().is_empty() => p,
-        _ => state
-            .output_dir
-            .join(format!("audiobook_{}.m4b.json", project_id))
-            .to_string_lossy()
-            .to_string(),
-    };
-
-    let output_path = if is_user_path {
-        resolve_export_target(&raw_output_path, &["json"])?
-    } else {
-        resolve_write_target(&state.get_allowed_roots(), &raw_output_path, &["json"])?
-    };
-    let output_path_str = output_path.to_string_lossy().to_string();
-
-    let exported_path =
-        crate::audio::m4b_exporter::M4bExporter::export_manifest(&manifest, &output_path_str)?;
-
-    let content = fs::read_to_string(&exported_path).unwrap_or_default();
-
-    Ok(SubtitleExportResult {
-        output_path: exported_path,
-        content,
-    })
-}
-
-#[tauri::command]
-pub fn save_single_segment_audio(
-    source_audio_path: String,
-    target_output_path: String,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let source_path =
-        resolve_existing_read_target(&state.get_allowed_roots(), &source_audio_path, &["wav"])?;
-    let target_path =
-        resolve_write_target(&state.get_allowed_roots(), &target_output_path, &["wav"])?;
-
-    fs::copy(&source_path, &target_path)
-        .map_err(|e| format!("Không thể lưu file audio segment: {}", e))?;
-
-    Ok(target_path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-pub fn read_audio_data_url(
-    path: Option<String>,
-    file_path: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let target = path
-        .or(file_path)
-        .ok_or_else(|| "Chưa cung cấp đường dẫn file audio".to_string())?;
-
-    if target.starts_with("data:") {
-        return Ok(target);
-    }
-
-    let canonical_target = resolve_existing_read_target(
-        &state.get_allowed_roots(),
-        &target,
-        &["wav", "mp3", "ogg", "flac"],
-    )?;
-
-    let bytes = fs::read(&canonical_target).map_err(|e| {
-        format!(
-            "Failed to read audio file at {}: {}",
-            canonical_target.display(),
-            e
-        )
-    })?;
-    let base64_str = BASE64_STANDARD.encode(&bytes);
-    Ok(format!("data:audio/wav;base64,{}", base64_str))
-}
-
-#[tauri::command]
-pub fn write_binary_file(
+pub fn export_audio_file(
+    source_path: String,
     target_path: String,
-    base64_data: String,
     state: State<'_, AppState>,
-) -> Result<String, String> {
-    let resolved_path = resolve_write_target(
-        &state.get_allowed_roots(),
-        &target_path,
-        &["wav", "mp3", "txt", "json", "srt", "vtt", "lrc"],
-    )?;
+) -> AppResult<String> {
+    let src = resolve_existing_read_target(
+        &[state.app_data_dir.as_path(), state.output_dir.as_path()],
+        &source_path,
+        &["wav", "mp3", "m4a"],
+    )
+    .map_err(AppError::FileSystem)?;
 
-    // Max 50MB decoded limit
-    let bytes = validate_base64_payload_size(&base64_data, 50 * 1024 * 1024)?;
+    let dst = resolve_export_target(&target_path, &["wav", "mp3", "m4a"])
+        .map_err(AppError::FileSystem)?;
 
-    fs::write(&resolved_path, &bytes)
-        .map_err(|e| format!("Không thể ghi tệp tại {}: {}", resolved_path.display(), e))?;
+    fs::copy(&src, &dst)
+        .map_err(|e| AppError::FileSystem(format!("Lỗi khi copy file audio: {}", e)))?;
 
-    Ok(resolved_path.to_string_lossy().to_string())
+    Ok(dst.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn read_audio_as_base64(audio_path: String, state: State<'_, AppState>) -> AppResult<String> {
+    let resolved_path = resolve_existing_read_target(
+        &[state.app_data_dir.as_path(), state.output_dir.as_path()],
+        &audio_path,
+        &["wav", "mp3", "m4a"],
+    )
+    .map_err(AppError::FileSystem)?;
+
+    let bytes = fs::read(&resolved_path)
+        .map_err(|e| AppError::FileSystem(format!("Không thể đọc file audio: {}", e)))?;
+
+    let base64_str = BASE64_STANDARD.encode(&bytes);
+    validate_base64_payload_size(&base64_str, 50 * 1024 * 1024)
+        .map_err(AppError::ValidationFailed)?;
+
+    let mime = if audio_path.ends_with(".mp3") {
+        "audio/mp3"
+    } else if audio_path.ends_with(".m4a") {
+        "audio/m4a"
+    } else {
+        "audio/wav"
+    };
+
+    Ok(format!("data:{};base64,{}", mime, base64_str))
+}
+
+#[tauri::command]
+pub fn check_audio_file_exists(audio_path: String, state: State<'_, AppState>) -> AppResult<bool> {
+    match resolve_existing_read_target(
+        &[state.app_data_dir.as_path(), state.output_dir.as_path()],
+        &audio_path,
+        &["wav", "mp3", "m4a"],
+    ) {
+        Ok(path) => Ok(path.exists()),
+        Err(_) => Ok(false),
+    }
 }

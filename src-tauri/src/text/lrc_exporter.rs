@@ -1,3 +1,4 @@
+use crate::storage::project_repo::SegmentRecord;
 use std::fs;
 use std::path::Path;
 use tracing::info;
@@ -38,4 +39,35 @@ impl LrcExporter {
         info!("Exported LRC subtitles to {:?}", path_ref);
         Ok(path_ref.to_string_lossy().to_string())
     }
+}
+
+pub fn generate_lrc_subtitles(segments: &[SegmentRecord], silence_gap_ms: u64) -> String {
+    let mut content = String::new();
+    content.push_str("[by:Auto TTS Desktop]\n\n");
+
+    let mut current_ms: u64 = 0;
+    for seg in segments {
+        let text = seg.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+
+        let total_secs = current_ms / 1000;
+        let minutes = total_secs / 60;
+        let seconds = total_secs % 60;
+        let hundredths = (current_ms % 1000) / 10;
+
+        content.push_str(&format!(
+            "[{:02}:{:02}.{:02}] {}\n",
+            minutes, seconds, hundredths, text
+        ));
+        let duration = if seg.duration_ms > 0 {
+            seg.duration_ms
+        } else {
+            3000
+        };
+        current_ms += duration + silence_gap_ms;
+    }
+
+    content
 }

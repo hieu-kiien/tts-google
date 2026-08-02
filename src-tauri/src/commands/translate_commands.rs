@@ -1,3 +1,4 @@
+use crate::error::{AppError, AppResult};
 use crate::state::app_state::AppState;
 use tauri::State;
 
@@ -6,13 +7,17 @@ pub async fn ai_translate_text(
     text: String,
     target_lang: String,
     state: State<'_, AppState>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     if text.trim().is_empty() {
-        return Err("Văn bản rỗng, vui lòng nhập nội dung cần dịch".to_string());
+        return Err(AppError::ValidationFailed(
+            "Văn bản rỗng, vui lòng nhập nội dung cần dịch".to_string(),
+        ));
     }
 
     let api_key = state.credentials.get_key().ok_or_else(|| {
-        "Chưa cấu hình Gemini API Key. Vui lòng bấm 'Cấu Hình API Key' để dán key.".to_string()
+        AppError::AuthInvalid(
+            "Chưa cấu hình Gemini API Key. Vui lòng bấm 'Cấu Hình API Key' để dán key.".to_string(),
+        )
     })?;
 
     let prompt = format!(
@@ -25,19 +30,23 @@ pub async fn ai_translate_text(
         .gemini_client
         .generate_text(&api_key, &prompt)
         .await
-        .map_err(|e| format!("Lỗi dịch thuật AI: {}", e))?;
+        .map_err(AppError::from)?;
 
     Ok(translated.trim().to_string())
 }
 
 #[tauri::command]
-pub async fn ai_polish_text(text: String, state: State<'_, AppState>) -> Result<String, String> {
+pub async fn ai_polish_text(text: String, state: State<'_, AppState>) -> AppResult<String> {
     if text.trim().is_empty() {
-        return Err("Văn bản rỗng, vui lòng nhập nội dung cần tối ưu".to_string());
+        return Err(AppError::ValidationFailed(
+            "Văn bản rỗng, vui lòng nhập nội dung cần tối ưu".to_string(),
+        ));
     }
 
     let api_key = state.credentials.get_key().ok_or_else(|| {
-        "Chưa cấu hình Gemini API Key. Vui lòng bấm 'Cấu Hình API Key' để dán key.".to_string()
+        AppError::AuthInvalid(
+            "Chưa cấu hình Gemini API Key. Vui lòng bấm 'Cấu Hình API Key' để dán key.".to_string(),
+        )
     })?;
 
     let prompt = format!(
@@ -49,7 +58,7 @@ pub async fn ai_polish_text(text: String, state: State<'_, AppState>) -> Result<
         .gemini_client
         .generate_text(&api_key, &prompt)
         .await
-        .map_err(|e| format!("Lỗi tối ưu văn bản AI: {}", e))?;
+        .map_err(AppError::from)?;
 
     Ok(polished.trim().to_string())
 }

@@ -66,7 +66,10 @@ impl DatabaseManager {
     }
 
     fn run_migrations(&self) -> Result<(), String> {
-        let mut conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         let tx = conn
             .transaction()
             .map_err(|e| format!("Failed to start migration transaction: {}", e))?;
@@ -200,7 +203,10 @@ impl DatabaseManager {
     }
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, String> {
-        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         let mut stmt = conn
             .prepare("SELECT value FROM settings WHERE key = ?1")
             .map_err(|e| e.to_string())?;
@@ -214,7 +220,10 @@ impl DatabaseManager {
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -230,7 +239,10 @@ impl DatabaseManager {
         is_rate_limit: bool,
         latency_ms: u64,
     ) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let rate_inc = if is_rate_limit { 1 } else { 0 };
         let req_inc = if is_rate_limit { 0 } else { 1 };
@@ -250,7 +262,10 @@ impl DatabaseManager {
     }
 
     pub fn get_quota_metrics(&self) -> Result<QuotaMetrics, String> {
-        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
         let (today_requests, today_chars, today_rate_limits, today_total_latency): (
@@ -275,11 +290,7 @@ impl DatabaseManager {
             )
             .unwrap_or((0, 0));
 
-        let avg_latency_ms = if today_requests > 0 {
-            today_total_latency / today_requests
-        } else {
-            0
-        };
+        let avg_latency_ms = today_total_latency.checked_div(today_requests).unwrap_or(0);
 
         Ok(QuotaMetrics {
             today_requests,
@@ -292,7 +303,10 @@ impl DatabaseManager {
     }
 
     pub fn get_schema_version(&self) -> Result<i32, String> {
-        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         let ver: i32 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .map_err(|e| format!("Failed to query schema version: {}", e))?;
@@ -300,7 +314,10 @@ impl DatabaseManager {
     }
 
     pub fn recover_expired_jobs(&self) -> Result<usize, String> {
-        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -329,7 +346,10 @@ impl DatabaseManager {
     }
 
     pub fn quick_check(&self) -> Result<bool, String> {
-        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         let result: String = conn
             .query_row("PRAGMA quick_check;", [], |r| r.get(0))
             .map_err(|e| format!("Quick check failed: {}", e))?;
@@ -337,7 +357,10 @@ impl DatabaseManager {
     }
 
     pub fn foreign_key_check(&self) -> Result<bool, String> {
-        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         let mut stmt = conn
             .prepare("PRAGMA foreign_key_check;")
             .map_err(|e| e.to_string())?;
@@ -351,7 +374,10 @@ impl DatabaseManager {
     where
         F: FnOnce(&Connection) -> SqlResult<R>,
     {
-        let conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         f(&conn).map_err(|e| format!("Database query failed: {}", e))
     }
 
@@ -359,7 +385,10 @@ impl DatabaseManager {
     where
         F: FnOnce(&mut Connection) -> SqlResult<R>,
     {
-        let mut conn = self.conn.lock().map_err(|_| "Database lock was poisoned".to_string())?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|_| "Database lock was poisoned".to_string())?;
         f(&mut conn).map_err(|e| format!("Database mutation failed: {}", e))
     }
 }

@@ -215,6 +215,7 @@ impl GeminiClient {
                 }
                 pos += 8 + chunk_size;
                 // Ensure 16-bit alignment for RIFF chunks
+                #[allow(clippy::manual_is_multiple_of)]
                 if chunk_size % 2 != 0 {
                     pos += 1;
                 }
@@ -314,24 +315,24 @@ impl GeminiClient {
                                             pcm_bytes.len()
                                         )));
                                     }
-                                    return Ok(pcm_bytes);
+                                    Ok(pcm_bytes)
                                 }
                                 Err(e) => {
                                     warn!(
                                         "Gemini API [{}] response parsed but no audio data: {}",
                                         model, e
                                     );
-                                    return Err(e);
+                                    Err(e)
                                 }
                             }
                         }
                         Err(e) => {
                             warn!("Failed to parse Gemini [{}] JSON response: {}", model, e);
-                            return Err(ApiError::MissingAudio);
+                            Err(ApiError::MissingAudio)
                         }
                     }
                 } else if status.as_u16() == 401 || status.as_u16() == 403 {
-                    return Err(ApiError::Unauthorized);
+                    Err(ApiError::Unauthorized)
                 } else if status.as_u16() == 429 {
                     // Extract headers BEFORE consuming response body
                     let retry_after = response
@@ -346,18 +347,19 @@ impl GeminiClient {
                         || err_body.to_lowercase().contains("rpd");
                     if is_daily {
                         warn!("Gemini API [{}] Daily quota exhausted (RPD).", model);
-                        return Err(ApiError::RateLimitedDaily);
+                        Err(ApiError::RateLimitedDaily)
+                    } else {
+                        warn!(
+                            "Gemini API [{}] Rate Limited (429 RPM). Retry after {:?}s.",
+                            model, retry_after
+                        );
+                        Err(ApiError::RateLimited(retry_after))
                     }
-                    warn!(
-                        "Gemini API [{}] Rate Limited (429 RPM). Retry after {:?}s.",
-                        model, retry_after
-                    );
-                    return Err(ApiError::RateLimited(retry_after));
                 } else {
                     let err_text = response.text().await.unwrap_or_default();
                     let safe_err = err_text.replace(clean_key, "***REDACTED***");
                     warn!("Gemini API [{}] error ({}): {}", model, status, safe_err);
-                    return Err(ApiError::ApiServerError(status.as_u16(), safe_err));
+                    Err(ApiError::ApiServerError(status.as_u16(), safe_err))
                 }
             }
             Err(e) => {
@@ -367,13 +369,14 @@ impl GeminiClient {
                         model,
                         timeout.as_secs()
                     );
-                    return Err(ApiError::NetworkError(format!(
+                    Err(ApiError::NetworkError(format!(
                         "Request timed out after {}s",
                         timeout.as_secs()
-                    )));
+                    )))
+                } else {
+                    warn!("Network error calling Gemini API [{}]: {}", model, e);
+                    Err(ApiError::NetworkError(e.to_string()))
                 }
-                warn!("Network error calling Gemini API [{}]: {}", model, e);
-                return Err(ApiError::NetworkError(e.to_string()));
             }
         }
     }

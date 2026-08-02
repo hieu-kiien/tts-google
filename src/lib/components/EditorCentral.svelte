@@ -592,6 +592,7 @@
           {segments}
           {selectedSegmentIds}
           {isSynthesizingPreview}
+          autoScrollEnabled={uiState.autoScrollToPlaying}
           registerTextarea={(id, el) => {
             if (el) textareaElements[id] = el;
             else delete textareaElements[id];
@@ -627,19 +628,19 @@
     justify-content: space-between;
     align-items: center;
     padding: var(--space-3) var(--space-4);
-    background: var(--color-bg-surface-raised);
     border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-surface-raised);
   }
 
   .editor-tools {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    width: 100%;
+    gap: var(--space-3);
   }
 
   .action-icons-left {
     display: flex;
+    align-items: center;
     gap: var(--space-1);
   }
 
@@ -657,11 +658,19 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 2px var(--space-2);
   }
 
   .search-field input {
-    height: var(--target-btn-sm);
-    width: 200px;
+    border: none;
+    background: transparent;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-primary);
+    outline: none;
+    width: 140px;
   }
 
   .icon-btn {
@@ -698,6 +707,8 @@
   .segments-list {
     display: flex;
     flex-direction: column;
+    flex: 1;
+    min-height: 0;
     gap: var(--space-3);
   }
 

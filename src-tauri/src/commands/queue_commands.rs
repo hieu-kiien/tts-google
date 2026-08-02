@@ -1,27 +1,10 @@
+use crate::error::{AppError, AppResult};
+use crate::models::segment::SegmentStatus;
 use crate::queue::worker::QueueSnapshot;
 use crate::state::app_state::AppState;
 use crate::storage::project_repo::ProjectRepository;
 use serde::{Deserialize, Serialize};
 use tauri::State;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CommandError {
-    pub code: String,
-    pub message: String,
-    pub retryable: bool,
-    pub diagnostic_id: Option<String>,
-}
-
-impl From<String> for CommandError {
-    fn from(msg: String) -> Self {
-        Self {
-            code: "INTERNAL_ERROR".to_string(),
-            message: msg,
-            retryable: false,
-            diagnostic_id: None,
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportReadiness {
@@ -36,102 +19,85 @@ pub struct ExportReadiness {
 pub async fn enqueue_project(
     project_id: String,
     state: State<'_, AppState>,
-) -> Result<QueueSnapshot, CommandError> {
-    let queue = state.queue_service.as_ref().ok_or_else(|| CommandError {
-        code: "SERVICE_UNAVAILABLE".to_string(),
-        message: "Queue service not initialized".to_string(),
-        retryable: false,
-        diagnostic_id: None,
-    })?;
+) -> AppResult<QueueSnapshot> {
+    let queue = state
+        .queue_service
+        .as_ref()
+        .ok_or_else(|| AppError::InternalError("Queue service not initialized".to_string()))?;
 
     queue
         .enqueue_project(project_id)
         .await
-        .map_err(|e| CommandError {
-            code: "ENQUEUE_FAILED".to_string(),
-            message: e,
-            retryable: true,
-            diagnostic_id: None,
-        })
+        .map_err(AppError::Queue)
 }
 
 #[tauri::command]
-pub async fn pause_project(
-    project_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), CommandError> {
-    let queue = state.queue_service.as_ref().ok_or_else(|| CommandError {
-        code: "SERVICE_UNAVAILABLE".to_string(),
-        message: "Queue service not initialized".to_string(),
-        retryable: false,
-        diagnostic_id: None,
-    })?;
+pub async fn pause_project(project_id: String, state: State<'_, AppState>) -> AppResult<()> {
+    let queue = state
+        .queue_service
+        .as_ref()
+        .ok_or_else(|| AppError::InternalError("Queue service not initialized".to_string()))?;
 
-    queue.pause_project(project_id).await.map_err(Into::into)
+    queue
+        .pause_project(project_id)
+        .await
+        .map_err(AppError::Queue)
 }
 
 #[tauri::command]
-pub async fn resume_project(
-    project_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), CommandError> {
-    let queue = state.queue_service.as_ref().ok_or_else(|| CommandError {
-        code: "SERVICE_UNAVAILABLE".to_string(),
-        message: "Queue service not initialized".to_string(),
-        retryable: false,
-        diagnostic_id: None,
-    })?;
+pub async fn resume_project(project_id: String, state: State<'_, AppState>) -> AppResult<()> {
+    let queue = state
+        .queue_service
+        .as_ref()
+        .ok_or_else(|| AppError::InternalError("Queue service not initialized".to_string()))?;
 
-    queue.resume_project(project_id).await.map_err(Into::into)
+    queue
+        .resume_project(project_id)
+        .await
+        .map_err(AppError::Queue)
 }
 
 #[tauri::command]
-pub async fn cancel_project(
-    project_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), CommandError> {
-    let queue = state.queue_service.as_ref().ok_or_else(|| CommandError {
-        code: "SERVICE_UNAVAILABLE".to_string(),
-        message: "Queue service not initialized".to_string(),
-        retryable: false,
-        diagnostic_id: None,
-    })?;
+pub async fn cancel_project(project_id: String, state: State<'_, AppState>) -> AppResult<()> {
+    let queue = state
+        .queue_service
+        .as_ref()
+        .ok_or_else(|| AppError::InternalError("Queue service not initialized".to_string()))?;
 
-    queue.cancel_project(project_id).await.map_err(Into::into)
+    queue
+        .cancel_project(project_id)
+        .await
+        .map_err(AppError::Queue)
 }
 
 #[tauri::command]
 pub async fn get_queue_snapshot(
     project_id: String,
     state: State<'_, AppState>,
-) -> Result<QueueSnapshot, CommandError> {
-    let queue = state.queue_service.as_ref().ok_or_else(|| CommandError {
-        code: "SERVICE_UNAVAILABLE".to_string(),
-        message: "Queue service not initialized".to_string(),
-        retryable: false,
-        diagnostic_id: None,
-    })?;
+) -> AppResult<QueueSnapshot> {
+    let queue = state
+        .queue_service
+        .as_ref()
+        .ok_or_else(|| AppError::InternalError("Queue service not initialized".to_string()))?;
 
     queue
         .get_queue_snapshot(project_id)
         .await
-        .map_err(Into::into)
+        .map_err(AppError::Queue)
 }
 
 #[tauri::command]
 pub async fn check_export_readiness(
     project_id: String,
     state: State<'_, AppState>,
-) -> Result<ExportReadiness, CommandError> {
-    let db = state.db.as_ref().ok_or_else(|| CommandError {
-        code: "DB_UNAVAILABLE".to_string(),
-        message: "Database not initialized".to_string(),
-        retryable: false,
-        diagnostic_id: None,
-    })?;
+) -> AppResult<ExportReadiness> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
 
     let segs = ProjectRepository::get_segments_for_project(db, &project_id)
-        .map_err(Into::<CommandError>::into)?;
+        .map_err(AppError::DatabaseError)?;
     let total = segs.len();
     if total == 0 {
         return Ok(ExportReadiness {
@@ -143,11 +109,21 @@ pub async fn check_export_readiness(
         });
     }
 
-    let successful = segs.iter().filter(|s| s.status == "success").count();
-    let failed = segs.iter().filter(|s| s.status == "failed").count();
+    let successful = segs
+        .iter()
+        .filter(|s| s.status == SegmentStatus::Success || s.status == SegmentStatus::Approved)
+        .count();
+    let failed = segs
+        .iter()
+        .filter(|s| s.status == SegmentStatus::Failed)
+        .count();
     let processing_or_queued = segs
         .iter()
-        .filter(|s| s.status == "processing" || s.status == "queued" || s.status == "retry_wait")
+        .filter(|s| {
+            s.status == SegmentStatus::Processing
+                || s.status == SegmentStatus::Queued
+                || s.status == SegmentStatus::RetryWait
+        })
         .count();
 
     let state_str = if processing_or_queued > 0 {
@@ -174,22 +150,15 @@ pub async fn requeue_segment(
     project_id: String,
     segment_id: String,
     state: State<'_, AppState>,
-) -> Result<(), CommandError> {
-    let db = state.db.as_ref().ok_or_else(|| CommandError {
-        code: "DB_UNAVAILABLE".to_string(),
-        message: "Database not initialized".to_string(),
-        retryable: false,
-        diagnostic_id: None,
-    })?;
+) -> AppResult<()> {
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| AppError::DatabaseError("Database not initialized".to_string()))?;
 
     ProjectRepository::requeue_segment(db, &project_id, &segment_id)
-        .map_err(|e| CommandError {
-            code: "REQUEUE_FAILED".to_string(),
-            message: e,
-            retryable: false,
-            diagnostic_id: None,
-        })?;
-        
+        .map_err(AppError::DatabaseError)?;
+
     // Optionally trigger queue if it's paused or we just want to wake it up
     if let Some(queue) = state.queue_service.as_ref() {
         let _ = queue.resume_project(project_id).await;
@@ -197,4 +166,3 @@ pub async fn requeue_segment(
 
     Ok(())
 }
-
