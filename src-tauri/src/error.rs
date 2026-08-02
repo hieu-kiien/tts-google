@@ -1,10 +1,50 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub type AppResult<T> = Result<T, AppError>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AppErrorCode {
+    AuthInvalid,
+    RateLimited,
+    DailyQuotaExhausted,
+    NetworkUnavailable,
+    ValidationFailed,
+    DatabaseError,
+    AudioCorrupt,
+    ContentFiltered,
+    FileSystemError,
+    QueueError,
+    InternalError,
+}
+
+impl AppErrorCode {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::AuthInvalid => "AUTH_INVALID",
+            Self::RateLimited => "RATE_LIMITED",
+            Self::DailyQuotaExhausted => "DAILY_QUOTA_EXHAUSTED",
+            Self::NetworkUnavailable => "NETWORK_UNAVAILABLE",
+            Self::ValidationFailed => "VALIDATION_FAILED",
+            Self::DatabaseError => "DATABASE_ERROR",
+            Self::AudioCorrupt => "AUDIO_CORRUPT",
+            Self::ContentFiltered => "CONTENT_FILTERED",
+            Self::FileSystemError => "FILE_SYSTEM_ERROR",
+            Self::QueueError => "QUEUE_ERROR",
+            Self::InternalError => "INTERNAL_ERROR",
+        }
+    }
+}
+
+impl rusqlite::types::ToSql for AppErrorCode {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(self.as_str()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppErrorResponse {
-    pub code: &'static str,
+    pub code: AppErrorCode,
     pub message: String,
     pub retryable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,18 +85,18 @@ pub enum AppError {
 }
 
 impl AppError {
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> AppErrorCode {
         match self {
-            Self::AuthInvalid(_) => "AUTH_INVALID",
-            Self::RateLimited(_) => "RATE_LIMITED",
-            Self::DailyQuotaExhausted(_) => "DAILY_QUOTA_EXHAUSTED",
-            Self::NetworkUnavailable(_) => "NETWORK_UNAVAILABLE",
-            Self::ValidationFailed(_) => "VALIDATION_FAILED",
-            Self::DatabaseError(_) => "DATABASE_ERROR",
-            Self::AudioCorrupt(_) => "AUDIO_CORRUPT",
-            Self::FileSystem(_) => "FILE_SYSTEM_ERROR",
-            Self::Queue(_) => "QUEUE_ERROR",
-            Self::InternalError(_) => "INTERNAL_ERROR",
+            Self::AuthInvalid(_) => AppErrorCode::AuthInvalid,
+            Self::RateLimited(_) => AppErrorCode::RateLimited,
+            Self::DailyQuotaExhausted(_) => AppErrorCode::DailyQuotaExhausted,
+            Self::NetworkUnavailable(_) => AppErrorCode::NetworkUnavailable,
+            Self::ValidationFailed(_) => AppErrorCode::ValidationFailed,
+            Self::DatabaseError(_) => AppErrorCode::DatabaseError,
+            Self::AudioCorrupt(_) => AppErrorCode::AudioCorrupt,
+            Self::FileSystem(_) => AppErrorCode::FileSystemError,
+            Self::Queue(_) => AppErrorCode::QueueError,
+            Self::InternalError(_) => AppErrorCode::InternalError,
         }
     }
 

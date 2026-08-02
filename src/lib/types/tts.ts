@@ -125,8 +125,21 @@ export interface ExportReadiness {
   output_directory: string;
 }
 
+export type AppErrorCode = 
+  | 'AUTH_INVALID'
+  | 'RATE_LIMITED'
+  | 'DAILY_QUOTA_EXHAUSTED'
+  | 'NETWORK_UNAVAILABLE'
+  | 'VALIDATION_FAILED'
+  | 'DATABASE_ERROR'
+  | 'AUDIO_CORRUPT'
+  | 'CONTENT_FILTERED'
+  | 'FILE_SYSTEM_ERROR'
+  | 'QUEUE_ERROR'
+  | 'INTERNAL_ERROR';
+
 export interface CommandError {
-  code: string;
+  code: AppErrorCode | string;
   message: string;
   retryable: boolean;
   diagnostic_id?: string | null;

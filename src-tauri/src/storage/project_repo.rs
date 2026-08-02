@@ -680,19 +680,19 @@ impl ProjectRepository {
     pub fn update_segment_status(
         db: &DatabaseManager,
         segment_id: &str,
-        status: &str,
+        status: SegmentStatus,
         attempts: u32,
         audio_path: Option<&str>,
         duration_ms: u64,
-        error_code: Option<u16>,
+        error_code: Option<&str>,
         error_message: Option<&str>,
     ) -> Result<(), String> {
         let now = Utc::now().to_rfc3339();
         db.with_conn(|conn| {
             conn.execute(
-                "UPDATE segments SET status = ?1, attempts = ?2, audio_path = ?3, duration_ms = ?4, error_code = ?5, error_message = ?6, updated_at = ?7, state_revision = state_revision + 1 WHERE id = ?8",
+                "UPDATE segments SET status = ?1, attempts = ?2, audio_path = ?3, duration_ms = ?4, last_error_code = ?5, error_message = ?6, updated_at = ?7, state_revision = state_revision + 1 WHERE id = ?8",
                 params![
-                    status,
+                    status.to_string(),
                     attempts,
                     audio_path,
                     duration_ms as i64,
