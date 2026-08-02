@@ -14,8 +14,10 @@ src-tauri/target/
 .env.*
 !.env.example
 
-# IDE
-.vscode/
+# IDE shared settings & extensions
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea/
 
 # OS metadata
@@ -23,12 +25,14 @@ src-tauri/target/
 Thumbs.db
 Desktop.ini
 
-# SQLite databases
+# SQLite databases (with fixture exception for test files)
 *.db
 *.sqlite
 *.db-journal
 *.db-wal
 *.db-shm
+!src-tauri/tests/fixtures/*.sqlite
+!src-tauri/tests/fixtures/*.db
 
 # Vite timestamps
 vite.config.js.timestamp-*
