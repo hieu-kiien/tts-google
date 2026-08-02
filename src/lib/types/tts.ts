@@ -101,7 +101,7 @@ export interface QueueSnapshot {
   completed_segments: number;
   failed_segments: number;
   pending_segments: number;
-  active_workers: number;
+  snapshot_revision: number;
 }
 
 export interface QueueProgressEvent {
