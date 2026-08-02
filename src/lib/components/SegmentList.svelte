@@ -76,7 +76,6 @@
 <div 
   class="virtual-scroll-container" 
   bind:this={scrollContainerEl}
-  style="height: 100%; overflow-y: auto; position: relative;"
 >
   <div
     class="virtual-scroll-inner"
@@ -114,3 +113,13 @@
     {/each}
   </div>
 </div>
+
+<style>
+  .virtual-scroll-container {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    overflow-y: auto;
+    position: relative;
+  }
+</style>

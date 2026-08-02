@@ -712,18 +712,7 @@
     gap: var(--space-3);
   }
 
-  /* R4 Keyframe Animations & Styles */
-  @keyframes pulse-ring {
-    0% {
-      box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
-    }
-    70% {
-      box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
-    }
-    100% {
-      box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
-    }
-  }
+  /* R4 Animations & Styles */
 
   .offline-banner {
     display: flex;

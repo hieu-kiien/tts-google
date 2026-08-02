@@ -607,7 +607,7 @@ impl ProjectRepository {
         segment_id: &str,
         worker_id: &str,
         fingerprint: Option<&str>,
-        status: &str,
+        status: SegmentStatus,
         output_path: Option<&str>,
         output_bytes_len: u64,
         duration_ms: u64,
@@ -639,7 +639,7 @@ impl ProjectRepository {
                    AND status = 'processing'
                    AND lease_owner = ?12",
                 params![
-                    status,
+                    status.to_string(),
                     fingerprint,
                     output_path,
                     output_bytes_len as i64,
@@ -1192,7 +1192,7 @@ mod tests {
             "s1",
             "worker_1",
             Some("fp123"),
-            "success",
+            SegmentStatus::Success,
             Some("audio.wav"),
             4800,
             200,

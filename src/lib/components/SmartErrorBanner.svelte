@@ -16,22 +16,42 @@
   let parsedError = $derived.by(() => {
     const rawMsg = activeErrorSegment.last_error_message || activeErrorSegment.error_message || '';
     const errCodeStr = activeErrorSegment.last_error_code || (activeErrorSegment.error_code ? String(activeErrorSegment.error_code) : '');
+    const lowerMsg = rawMsg.toLowerCase();
     
-    if (errCodeStr === 'AUTH_INVALID' || rawMsg.includes('API Key') || rawMsg.includes('401') || rawMsg.includes('403')) {
+    if (
+      errCodeStr === 'AUTH_INVALID' || 
+      errCodeStr === '401_UNAUTHORIZED' ||
+      rawMsg.includes('API Key') || 
+      rawMsg.includes('401') || 
+      rawMsg.includes('403')
+    ) {
       return {
         code: 'AUTH_INVALID',
         message: rawMsg || 'API Key không hợp lệ hoặc đã bị vô hiệu hóa.',
         retryable: false,
       };
     }
-    if (errCodeStr === 'DAILY_QUOTA_EXHAUSTED' || rawMsg.includes('Daily Quota')) {
+
+    if (
+      errCodeStr === 'DAILY_QUOTA_EXHAUSTED' || 
+      errCodeStr === '429_QUOTA_EXHAUSTED' ||
+      lowerMsg.includes('hạn ngạch') ||
+      lowerMsg.includes('quota') ||
+      lowerMsg.includes('daily quota')
+    ) {
       return {
         code: 'DAILY_QUOTA_EXHAUSTED',
         message: rawMsg || 'Đã chạm hạn ngạch API trong ngày.',
         retryable: false,
       };
     }
-    if (errCodeStr === 'RATE_LIMITED' || rawMsg.includes('429') || rawMsg.includes('Rate Limited')) {
+
+    if (
+      errCodeStr === 'RATE_LIMITED' || 
+      errCodeStr === '429_RATE_LIMITED' ||
+      rawMsg.includes('429') || 
+      lowerMsg.includes('rate limit')
+    ) {
       return {
         code: 'RATE_LIMITED',
         message: rawMsg || 'Quá giới hạn tần suất gọi API (429). Hàng đợi đang tự động hoãn thử lại.',

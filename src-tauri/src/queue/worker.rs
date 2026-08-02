@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::api::provider::TtsProvider;
 use crate::audio::pcm_wav::write_pcm_to_wav_atomic;
+use crate::models::segment::SegmentStatus;
 use crate::state::app_state::AppState;
 use crate::storage::project_repo::ProjectRepository;
 
@@ -476,7 +477,7 @@ impl QueueService {
                     &task.id,
                     worker_id,
                     Some(fp),
-                    "success",
+                    crate::models::segment::SegmentStatus::Success,
                     Some(&wav_path_str),
                     file_size,
                     dur_ms,
@@ -534,12 +535,12 @@ impl QueueService {
                     &task.id,
                     worker_id,
                     None,
-                    "failed",
+                    crate::models::segment::SegmentStatus::Failed,
                     None,
                     0,
                     0,
                     None,
-                    Some("WAV_WRITE_ERROR"),
+                    Some("AUDIO_CORRUPT"),
                     Some(&e.to_string()),
                 );
                 Err(e.to_string())
@@ -566,12 +567,12 @@ impl QueueService {
         let (friendly_msg, err_code_str) = if is_unauthorized {
             (
                 "Gemini API Key không hợp lệ hoặc đã bị vô hiệu hóa. Vui lòng kiểm tra lại cấu hình Key.".to_string(),
-                "401_UNAUTHORIZED",
+                "AUTH_INVALID",
             )
         } else if is_daily_quota {
             (
                 "Hạn ngạch sử dụng Google API trong ngày đã hết. Hàng đợi đã tạm dừng.".to_string(),
-                "429_QUOTA_EXHAUSTED",
+                "DAILY_QUOTA_EXHAUSTED",
             )
         } else if err.is_rate_limit {
             (
@@ -579,17 +580,17 @@ impl QueueService {
                     "Đã đạt giới hạn tốc độ yêu cầu (Rate Limit 429). Đang chờ thử lại sau {}s...",
                     err.retry_after_secs.unwrap_or(10)
                 ),
-                "429_RATE_LIMITED",
+                "RATE_LIMITED",
             )
         } else if err.code.contains("ContentFiltered") {
             (
                 "Đoạn văn bản bị từ chối bởi bộ lọc an toàn của Google.".to_string(),
-                "400_CONTENT_FILTERED",
+                "CONTENT_FILTERED",
             )
         } else {
             (
                 format!("Lỗi kết nối API Google: {}", err.message),
-                "API_ERROR",
+                "INTERNAL_ERROR",
             )
         };
 
@@ -625,7 +626,7 @@ impl QueueService {
                 &task.id,
                 worker_id,
                 None,
-                "retry_wait",
+                crate::models::segment::SegmentStatus::RetryWait,
                 None,
                 0,
                 0,
@@ -650,13 +651,12 @@ impl QueueService {
                         "message": friendly_msg
                     }),
                 );
-                let sleep_duration = err.retry_after_secs.unwrap_or(60);
-                sleep(Duration::from_secs(sleep_duration)).await;
-                *consecutive_quota_errors = 0;
+                sleep(Duration::from_secs(60)).await;
                 return true;
             }
         }
 
+        *consecutive_quota_errors = 0;
         let is_retryable = if is_unauthorized || err.code.contains("ContentFiltered") {
             false
         } else if is_rate_limit {
@@ -682,7 +682,7 @@ impl QueueService {
                 &task.id,
                 worker_id,
                 None,
-                "retry_wait",
+                crate::models::segment::SegmentStatus::RetryWait,
                 None,
                 0,
                 0,
@@ -696,7 +696,7 @@ impl QueueService {
                 &task.id,
                 worker_id,
                 None,
-                "failed",
+                crate::models::segment::SegmentStatus::Failed,
                 None,
                 0,
                 0,
@@ -801,12 +801,12 @@ impl QueueService {
                         &task.id,
                         &worker_id,
                         None,
-                        "failed",
+                        SegmentStatus::Failed,
                         None,
                         0,
                         0,
                         None,
-                        Some("401"),
+                        Some("AUTH_INVALID"),
                         Some("Missing Gemini API Key"),
                     );
                     final_outcome = WorkerOutcome::Failed("Missing Gemini API Key".to_string());
@@ -816,7 +816,17 @@ impl QueueService {
 
             if cancel_token.is_cancelled() {
                 let _ = ProjectRepository::commit_task_result(
-                    db, &task.id, &worker_id, None, "queued", None, 0, 0, None, None, None,
+                    db,
+                    &task.id,
+                    &worker_id,
+                    None,
+                    SegmentStatus::Queued,
+                    None,
+                    0,
+                    0,
+                    None,
+                    None,
+                    None,
                 );
                 final_outcome = WorkerOutcome::Cancelled;
                 break;
