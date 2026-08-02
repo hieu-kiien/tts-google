@@ -1,11 +1,38 @@
-.DS_Store
+# Dependencies
 node_modules
+
+# Build outputs
 /build
 /.svelte-kit
 /package
+
+# Rust / Cargo
+src-tauri/target/
+
+# Environment
 .env
 .env.*
 !.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# SQLite databases
+*.db
+*.sqlite
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Vite timestamps
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Agents
 .agents

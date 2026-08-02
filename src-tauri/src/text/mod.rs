@@ -1,5 +1,4 @@
 pub mod chunker;
-pub mod dialogue_parser;
 pub mod file_parser;
 pub mod fingerprint;
 pub mod lrc_exporter;
