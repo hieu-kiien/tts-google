@@ -6,8 +6,13 @@ on:
   pull_request:
     branches: [ main, master ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test-and-check:
+  frontend-quality:
+    name: Frontend Quality & Build
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,10 +32,36 @@ jobs:
       - name: Frontend Svelte Check
         run: npm run check
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Frontend Build
+        run: npm run build
 
-      - name: Rust Cargo Check
+  rust-quality:
+    name: Rust Backend Quality & Test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust Cargo Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Rust Format Check
         run: |
           cd src-tauri
-          cargo check --verbose
+          cargo fmt --all -- --check
+
+      - name: Rust Clippy Lint
+        run: |
+          cd src-tauri
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Rust Unit & Integration Tests
+        run: |
+          cd src-tauri
+          cargo test --all-targets --all-features

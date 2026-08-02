@@ -49,3 +49,62 @@
     </button>
   </div>
 </div>
+
+<style>
+  .smart-error-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid var(--color-error-border, rgba(239, 68, 68, 0.3));
+    border-radius: var(--radius-md, 6px);
+    padding: 10px 16px;
+    margin: 8px 16px;
+  }
+
+  .error-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: var(--font-size-sm, 13px);
+    color: var(--color-error-text, #ef4444);
+  }
+
+  .error-icon {
+    font-size: 18px;
+  }
+
+  .error-text {
+    line-height: 1.4;
+  }
+
+  .error-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-banner {
+    padding: 6px 12px;
+    border-radius: var(--radius-sm, 4px);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--color-border, #ccc);
+    background: var(--color-bg-surface-raised, #fff);
+    color: var(--color-text-primary, #333);
+    transition: background 0.15s ease;
+  }
+
+  .btn-banner.primary {
+    background: var(--color-accent, #2563eb);
+    color: #fff;
+    border-color: var(--color-accent, #2563eb);
+  }
+
+  .btn-banner.secondary {
+    background: rgba(245, 158, 11, 0.15);
+    color: #d97706;
+    border-color: rgba(245, 158, 11, 0.4);
+  }
+</style>

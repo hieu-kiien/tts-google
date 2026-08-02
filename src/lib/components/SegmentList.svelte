@@ -59,6 +59,16 @@
       }
     };
   }
+
+  // Auto-scroll to active playing segment
+  $effect(() => {
+    if (playerState.currentPlayingSegmentId) {
+      const idx = segments.findIndex(s => s.id === playerState.currentPlayingSegmentId);
+      if (idx !== -1) {
+        $virtualizer.scrollToIndex(idx, { align: "auto" });
+      }
+    }
+  });
 </script>
 
 <div 

@@ -622,71 +622,6 @@
     min-width: 480px;
   }
 
-  /* R3 Smart Error Recovery Banner Styling */
-  .smart-error-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    border-radius: var(--radius-md);
-    padding: 10px 16px;
-    margin: var(--space-3) var(--space-4) 0 var(--space-4);
-  }
-
-  .error-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: var(--font-size-xs);
-    color: #b91c1c;
-  }
-
-  .error-icon {
-    font-size: 18px;
-  }
-
-  .error-actions {
-    display: flex;
-    gap: 8px;
-  }
-
-  .btn-banner {
-    padding: 6px 12px;
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    font-weight: 600;
-    border: none;
-    cursor: pointer;
-  }
-
-  .btn-banner.primary {
-    background: #ef4444;
-    color: white;
-  }
-
-  .btn-banner.secondary {
-    background: #ffffff;
-    color: #374151;
-    border: 1px solid #d1d5db;
-  }
-
-  .segment-batch-toolbar.active {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: var(--color-bg-surface-raised);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--color-accent);
-    border-radius: var(--radius-md);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin: var(--space-2) var(--space-3);
-    box-shadow: var(--shadow-md);
-  }
-
   .editor-header {
     display: flex;
     justify-content: space-between;
@@ -754,7 +689,9 @@
 
   .editor-content-viewport {
     flex: 1;
-    overflow-y: auto;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
     padding: var(--space-4);
   }
 
@@ -762,26 +699,6 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-  }
-
-  .segment-row {
-    display: flex;
-    gap: var(--space-3);
-    padding: var(--space-3);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-bg-surface);
-    transition: background 0.15s ease, border-color 0.15s ease;
-  }
-
-  .segment-row.selected {
-    border-color: var(--color-accent);
-    background: var(--color-bg-surface-selected);
-  }
-
-  .segment-row.playing {
-    border-color: var(--color-success);
-    background: var(--color-success-bg);
   }
 
   /* R4 Keyframe Animations & Styles */
@@ -797,143 +714,6 @@
     }
   }
 
-  @keyframes wave-bar {
-    0%, 100% { transform: scaleY(0.3); }
-    50% { transform: scaleY(1.0); }
-  }
-
-  .segment-row.processing-active {
-    border-color: #f59e0b;
-    animation: pulse-ring 1.8s infinite;
-    background: rgba(245, 158, 11, 0.06);
-  }
-
-  .status-processing-box {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .sound-wave-anim {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    height: 14px;
-  }
-
-  .sound-wave-anim .bar {
-    width: 3px;
-    height: 100%;
-    background-color: #d97706;
-    border-radius: 2px;
-    animation: wave-bar 0.7s ease-in-out infinite alternate;
-  }
-
-  .sound-wave-anim .bar-1 { animation-delay: 0s; }
-  .sound-wave-anim .bar-2 { animation-delay: 0.2s; }
-  .sound-wave-anim .bar-3 { animation-delay: 0.4s; }
-
-  .segment-row.locked { opacity: 0.8; }
-  .segment-row.skipped { text-decoration: line-through; opacity: 0.6; }
-
-  .segment-meta {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-1);
-    min-width: 44px;
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-  }
-
-  .warning-badge {
-    color: var(--color-warning-text);
-    background: var(--color-warning-bg);
-    padding: 2px 4px;
-    border-radius: var(--radius-sm);
-    font-size: 10px;
-  }
-
-  .segment-body {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  .segment-textarea {
-    width: 100%;
-    min-height: 52px;
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: var(--color-text-primary);
-    font-size: var(--font-size-base);
-    line-height: 1.6;
-    font-family: inherit;
-    resize: vertical;
-    field-sizing: content;
-    outline: none;
-  }
-
-  .segment-footer-info {
-    display: flex;
-    gap: var(--space-4);
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-    align-items: center;
-  }
-
-  .status-approved { color: var(--color-accent-text); font-weight: 600; }
-  .status-success { color: var(--color-success-text); font-weight: 500; }
-  .status-warning { color: var(--color-warning-text); font-weight: 500; }
-  .status-error { color: var(--color-error-text); font-weight: 500; }
-  .status-pending { color: var(--color-text-muted); }
-
-  .btn-resynthesize {
-    color: #d97706 !important;
-    background: rgba(245, 158, 11, 0.15) !important;
-    font-weight: bold;
-  }
-  .btn-resynthesize:hover {
-    background: rgba(245, 158, 11, 0.3) !important;
-  }
-  .badge-stale {
-    background: rgba(245, 158, 11, 0.15);
-    padding: 2px 6px;
-    border-radius: var(--radius-sm);
-  }
-  .duration-badge {
-    color: var(--color-text-muted);
-    font-weight: 500;
-  }
-
-  .segment-actions {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .btn-action {
-    width: 32px;
-    height: 32px;
-    border-radius: var(--radius-sm);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--color-bg-surface-raised);
-  }
-  .btn-action:hover { background: var(--color-bg-surface-hover); }
-
-  .btn-secondary-action {
-    display: none;
-  }
-
-  .segment-row:hover .btn-secondary-action,
-  .segment-row.selected .btn-secondary-action {
-    display: flex;
-  }
-
   .offline-banner {
     display: flex;
     align-items: center;
@@ -946,56 +726,5 @@
     font-size: var(--font-size-xs);
     color: #b91c1c;
     font-weight: 500;
-  }
-
-  .btn-merge {
-    color: #2563eb !important;
-    background: rgba(37, 99, 235, 0.1) !important;
-  }
-  .btn-merge:hover {
-    background: rgba(37, 99, 235, 0.2) !important;
-  }
-
-  .btn-delete-segment {
-    color: #dc2626 !important;
-  }
-  .btn-delete-segment:hover {
-    background: rgba(220, 38, 38, 0.15) !important;
-  }
-
-  .segment-batch-toolbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 14px;
-    background: var(--color-bg-surface-raised);
-    border-bottom: 1px solid var(--color-border);
-    font-size: 13px;
-  }
-
-  .select-all-segments-label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    font-weight: 500;
-  }
-
-  .batch-segment-actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .seg-checkbox {
-    width: 16px;
-    height: 16px;
-    cursor: pointer;
-    margin-right: 4px;
-  }
-
-  .segment-row.selected-batch {
-    background: rgba(37, 99, 235, 0.05);
-    border-left: 3px solid var(--color-accent);
   }
 </style>

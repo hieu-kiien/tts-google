@@ -23,3 +23,35 @@
     </div>
   </div>
 {/if}
+
+<style>
+  .segment-batch-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 14px;
+    background: var(--color-bg-surface-raised, #f3f4f6);
+    border-bottom: 1px solid var(--color-border, #e5e7eb);
+    font-size: 13px;
+  }
+
+  .segment-batch-toolbar.active {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .select-all-segments-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  .batch-segment-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+</style>
